@@ -4,8 +4,10 @@
  *
  * Every internal image lives in VK_IMAGE_LAYOUT_GENERAL for its whole life and the passes are
  * separated by one global memory barrier each: simple, correct, and fast enough for a first
- * implementation. Descriptor sets are built once per swapchain, for both frame parities, so
- * recording a frame is a fixed sequence of bind + dispatch. */
+ * implementation. Descriptor sets are built once per swapchain, for both frame parities, so the
+ * flow and the interpolation are a fixed sequence of bind + dispatch per (slot, parity,
+ * companion): recorded once into a secondary command buffer and executed from the primary, which
+ * keeps only what changes per frame (the copies from and to the swapchain images, the dump). */
 
 #include "framegen.h"
 
@@ -342,6 +344,10 @@ struct afmf_framegen {
     VkDescriptorPool pool;
     VkDescriptorSet sets[2][SET_COUNT]; /* per frame parity */
 
+    /* Pre-recorded fixed part of a frame, [slot][parity][companion]; NULL records inline. */
+    VkCommandPool secondary_pool;
+    struct secondary *secondaries;
+
     bool initialized; /* layouts transitioned and detector cleared in a command buffer */
     uint32_t frame_index;
 
@@ -359,6 +365,14 @@ struct afmf_framegen {
     uint8_t *dump_mapped;
     uint32_t dumps_written;
     bool dump_recorded; /* the command buffer in flight copies into dump_buffer */
+};
+
+struct secondary {
+    VkCommandBuffer cmd;
+    bool recorded;
+    uint32_t levels;                      /* search levels it was recorded with; re-recorded on change */
+    uint8_t stages[AFMF_PROFILE_QUERIES]; /* profiler stages its timestamps close, replayed per use */
+    uint32_t stage_count;
 };
 
 /* std140 layout of cbOF_t / cbOF_SPD_t in ffx_opticalflow_callbacks_glsl.h. */
@@ -975,10 +989,51 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
 
 /* ---- create / destroy ---------------------------------------------------------------------- */
 
+void afmf_framegen_set_family(struct afmf_device *dev, struct afmf_framegen *fg, uint32_t family)
+{
+    if (fg->secondary_pool != VK_NULL_HANDLE || dev->set_loader_data == NULL)
+        return;
+    uint32_t count = fg->slots * 4u;
+    VkCommandPoolCreateInfo pool = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = family,
+    };
+    if (dev->fns.create_command_pool(dev->handle, &pool, NULL, &fg->secondary_pool) != VK_SUCCESS)
+        return;
+    VkCommandBuffer *cmds = calloc(count, sizeof *cmds);
+    fg->secondaries = calloc(count, sizeof *fg->secondaries);
+    VkCommandBufferAllocateInfo alloc = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = fg->secondary_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_SECONDARY,
+        .commandBufferCount = count,
+    };
+    bool ok = cmds != NULL && fg->secondaries != NULL &&
+              dev->fns.allocate_command_buffers(dev->handle, &alloc, cmds) == VK_SUCCESS;
+    /* Allocated below the loader's trampoline: stamp the dispatch pointer ourselves. */
+    for (uint32_t i = 0; ok && i < count; i++)
+        ok = dev->set_loader_data(dev->handle, cmds[i]) == VK_SUCCESS;
+    if (ok) {
+        for (uint32_t i = 0; i < count; i++)
+            fg->secondaries[i].cmd = cmds[i];
+    } else {
+        AFMF_WARN("pre-recorded command buffers unavailable; recording every frame");
+        dev->fns.destroy_command_pool(dev->handle, fg->secondary_pool, NULL);
+        fg->secondary_pool = VK_NULL_HANDLE;
+        free(fg->secondaries);
+        fg->secondaries = NULL;
+    }
+    free(cmds);
+}
+
 void afmf_framegen_destroy(struct afmf_device *dev, struct afmf_framegen *fg)
 {
     if (fg == NULL)
         return;
+    if (fg->secondary_pool != VK_NULL_HANDLE)
+        dev->fns.destroy_command_pool(dev->handle, fg->secondary_pool, NULL); /* frees the buffers */
+    free(fg->secondaries);
     if (fg->pool != VK_NULL_HANDLE)
         dev->fns.destroy_descriptor_pool(dev->handle, fg->pool, NULL); /* frees the sets */
     if (fg->queries != VK_NULL_HANDLE) {
@@ -1252,14 +1307,126 @@ uint32_t afmf_framegen_max_levels(const struct afmf_framegen *fg)
     return fg->max_levels;
 }
 
+/* The fixed part of a frame: luma, pyramid, scene change detector, then, with a companion, the
+ * coarse-to-fine search and the interpolated frame into fg->output. Depends only on the slot
+ * (constants region), the parity (descriptor sets), `companion` and `levels`. */
+static void record_flow(struct afmf_device *dev, struct afmf_framegen *fg, VkCommandBuffer cmd,
+                        uint32_t slot, uint32_t p, uint32_t levels, bool companion)
+{
+    const struct afmf_framegen_pipelines *pl = dev->framegen_pipelines;
+    uint32_t w = fg->of_extent.width, h = fg->of_extent.height; /* optical flow dimensions */
+    uint32_t of0 = cb_offset(fg, slot, 0);
+    dispatch(dev, cmd, pl->pipelines[PASS_PREPARE_LUMA], pl->layouts[PASS_PREPARE_LUMA],
+             fg->sets[p][SET_PREPARE], &of0, 1, ((w + 1) / 2 + 15) / 16, ((h + 1) / 2 + 15) / 16, 1);
+    profiler_mark(dev, fg, cmd, slot, STAGE_PREPARE);
+
+    /* The pyramid (reads luma 0, writes levels 1-6) and the detector's histogram (reads luma 0)
+     * are independent: no barrier between them, one after both. */
+    uint32_t pyramid_offsets[2] = {of0, cb_offset(fg, slot, AFMF_LEVELS)};
+    dispatch_pass(dev, cmd, pl->pipelines[PASS_PYRAMID], pl->layouts[PASS_PYRAMID],
+                  fg->sets[p][SET_PYRAMID], pyramid_offsets, 2, (w - 1) / 64 + 1, (h - 1) / 64 + 1,
+                  1, false);
+    profiler_mark(dev, fg, cmd, slot, STAGE_PYRAMID);
+
+    uint32_t strata_width = (w / 4) / AFMF_HISTOGRAMS_PER_DIM;
+    dispatch(dev, cmd, pl->pipelines[PASS_SCD_HISTOGRAM], pl->layouts[PASS_SCD_HISTOGRAM],
+             fg->sets[p][SET_SCD_HISTOGRAM], &of0, 1, (strata_width + 31) / 32, 16,
+             AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM);
+    dispatch(dev, cmd, pl->pipelines[PASS_SCD_DIVERGENCE], pl->layouts[PASS_SCD_DIVERGENCE],
+             fg->sets[p][SET_SCD_DIVERGENCE], &of0, 1,
+             AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM, AFMF_HISTOGRAM_SHIFTS, 1);
+    profiler_mark(dev, fg, cmd, slot, STAGE_SCD);
+
+    for (uint32_t k = companion ? levels : 0; k-- > 0;) {
+        uint32_t ofk = cb_offset(fg, slot, k);
+        uint32_t luma_w = fg->luma_size[k].width, luma_h = fg->luma_size[k].height;
+        dispatch(dev, cmd, pl->pipelines[PASS_SEARCH], pl->layouts[PASS_SEARCH],
+                 fg->sets[p][SET_SEARCH + k], &ofk, 1, ((luma_w + 3) / 4 * 16 + 63) / 64,
+                 (luma_h + 15) / 16, 1);
+        profiler_mark(dev, fg, cmd, slot, STAGE_SEARCH);
+        dispatch(dev, cmd, pl->pipelines[PASS_FILTER], pl->layouts[PASS_FILTER],
+                 fg->sets[p][SET_FILTER + k], &ofk, 1, (fg->flow_size[k].width + 15) / 16,
+                 (fg->flow_size[k].height + 3) / 4, 1);
+        profiler_mark(dev, fg, cmd, slot, STAGE_FILTER);
+        if (k > 0) {
+            dispatch(dev, cmd, pl->pipelines[PASS_SCALE], pl->layouts[PASS_SCALE],
+                     fg->sets[p][SET_SCALE + k - 1], &ofk, 1, (fg->flow_size[k - 1].width + 3) / 4,
+                     (fg->flow_size[k - 1].height + 3) / 4, 1);
+            profiler_mark(dev, fg, cmd, slot, STAGE_SCALE);
+        }
+    }
+
+    /* The frame in between, into fg->output. */
+    if (companion) {
+        uint32_t out_w = fg->extent.width, out_h = fg->extent.height;
+        struct interpolate_push push = {
+            .size = {(int32_t)out_w, (int32_t)out_h},
+            .block = (int32_t)AFMF_FLOW_BLOCK,
+            .fallback = afmf_config_get()->fast_motion == AFMF_RESPONSE_BLENDED_FRAMES ? 1 : 0,
+            .max_motion = AFMF_MAX_TRUSTED_MOTION,
+            .flow_scale = (float)fg->flow_scale,
+        };
+        dev->fns.cmd_push_constants(cmd, pl->layouts[PASS_INTERPOLATE], VK_SHADER_STAGE_COMPUTE_BIT,
+                                    0, (uint32_t)sizeof push, &push);
+        dispatch(dev, cmd, pl->interpolate[fg->variant], pl->layouts[PASS_INTERPOLATE],
+                 fg->sets[p][SET_INTERPOLATE], NULL, 0, (out_w + 7) / 8, (out_h + 7) / 8, 1);
+        profiler_mark(dev, fg, cmd, slot, STAGE_INTERPOLATE);
+    }
+}
+
+/* Executes the pre-recorded fixed part for (slot, p, companion), recording it first when it has
+ * never run or the search levels changed since; the slot's fence has been waited on by the
+ * caller, so nothing of this slot is in flight. Records inline when there are no secondaries. */
+static void execute_flow(struct afmf_device *dev, struct afmf_framegen *fg, VkCommandBuffer cmd,
+                         uint32_t slot, uint32_t p, uint32_t levels, bool companion)
+{
+    struct secondary *sec =
+        fg->secondaries != NULL ? &fg->secondaries[(slot * 2u + p) * 2u + (companion ? 1u : 0u)] : NULL;
+    if (sec == NULL) {
+        record_flow(dev, fg, cmd, slot, p, levels, companion);
+        return;
+    }
+    bool profiling = fg->queries != VK_NULL_HANDLE;
+    uint32_t before = profiling ? fg->query_count[slot] : 0;
+    if (!sec->recorded || sec->levels != levels) {
+        /* The marks it writes land at fixed query indices: the primary always writes the same
+         * two before it (opening, ingest), so a replay only needs the stage list. */
+        VkCommandBufferInheritanceInfo inherit = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO};
+        VkCommandBufferBeginInfo begin = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .pInheritanceInfo = &inherit};
+        sec->recorded = false;
+        if (dev->fns.begin_command_buffer(sec->cmd, &begin) == VK_SUCCESS) {
+            record_flow(dev, fg, sec->cmd, slot, p, levels, companion);
+            sec->recorded = dev->fns.end_command_buffer(sec->cmd) == VK_SUCCESS;
+        }
+        if (!sec->recorded) {
+            if (profiling)
+                fg->query_count[slot] = before;
+            record_flow(dev, fg, cmd, slot, p, levels, companion);
+            return;
+        }
+        sec->levels = levels;
+        sec->stage_count = profiling ? fg->query_count[slot] - before : 0;
+        if (sec->stage_count > 0)
+            memcpy(sec->stages, fg->query_stage + (size_t)slot * AFMF_PROFILE_QUERIES + before,
+                   sec->stage_count);
+    } else if (profiling && before + sec->stage_count <= AFMF_PROFILE_QUERIES) {
+        memcpy(fg->query_stage + (size_t)slot * AFMF_PROFILE_QUERIES + before, sec->stages,
+               sec->stage_count);
+        fg->query_count[slot] = before + sec->stage_count;
+    }
+    dev->fns.cmd_execute_commands(cmd, 1, &sec->cmd);
+}
+
 void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkCommandBuffer cmd,
                           uint32_t slot, VkImage current, VkImage target)
 {
     const struct afmf_framegen_pipelines *pl = dev->framegen_pipelines;
-    const struct afmf_config *cfg = afmf_config_get();
     uint32_t levels = fg->levels;
     uint32_t p = fg->frame_index & 1u;
     uint32_t w = fg->of_extent.width, h = fg->of_extent.height; /* optical flow dimensions */
+    bool companion = target != VK_NULL_HANDLE;
 
     if (!fg->initialized)
         initialize(dev, fg, cmd);
@@ -1284,63 +1451,12 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
     }
     profiler_mark(dev, fg, cmd, slot, STAGE_INGEST);
 
-    /* 2. Optical flow: luma, pyramid, scene change detector, then coarse-to-fine search. */
-    uint32_t of0 = cb_offset(fg, slot, 0);
-    dispatch(dev, cmd, pl->pipelines[PASS_PREPARE_LUMA], pl->layouts[PASS_PREPARE_LUMA],
-             fg->sets[p][SET_PREPARE], &of0, 1, ((w + 1) / 2 + 15) / 16, ((h + 1) / 2 + 15) / 16, 1);
-    profiler_mark(dev, fg, cmd, slot, STAGE_PREPARE);
-
-    /* The pyramid (reads luma 0, writes levels 1-6) and the detector's histogram (reads luma 0)
-     * are independent: no barrier between them, one after both. */
-    uint32_t pyramid_offsets[2] = {of0, cb_offset(fg, slot, AFMF_LEVELS)};
-    dispatch_pass(dev, cmd, pl->pipelines[PASS_PYRAMID], pl->layouts[PASS_PYRAMID],
-                  fg->sets[p][SET_PYRAMID], pyramid_offsets, 2, (w - 1) / 64 + 1, (h - 1) / 64 + 1,
-                  1, false);
-    profiler_mark(dev, fg, cmd, slot, STAGE_PYRAMID);
-
-    uint32_t strata_width = (w / 4) / AFMF_HISTOGRAMS_PER_DIM;
-    dispatch(dev, cmd, pl->pipelines[PASS_SCD_HISTOGRAM], pl->layouts[PASS_SCD_HISTOGRAM],
-             fg->sets[p][SET_SCD_HISTOGRAM], &of0, 1, (strata_width + 31) / 32, 16,
-             AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM);
-    dispatch(dev, cmd, pl->pipelines[PASS_SCD_DIVERGENCE], pl->layouts[PASS_SCD_DIVERGENCE],
-             fg->sets[p][SET_SCD_DIVERGENCE], &of0, 1,
-             AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM, AFMF_HISTOGRAM_SHIFTS, 1);
-    profiler_mark(dev, fg, cmd, slot, STAGE_SCD);
-
-    for (uint32_t k = target != VK_NULL_HANDLE ? levels : 0; k-- > 0;) {
-        uint32_t ofk = cb_offset(fg, slot, k);
-        uint32_t luma_w = fg->luma_size[k].width, luma_h = fg->luma_size[k].height;
-        dispatch(dev, cmd, pl->pipelines[PASS_SEARCH], pl->layouts[PASS_SEARCH],
-                 fg->sets[p][SET_SEARCH + k], &ofk, 1, ((luma_w + 3) / 4 * 16 + 63) / 64,
-                 (luma_h + 15) / 16, 1);
-        profiler_mark(dev, fg, cmd, slot, STAGE_SEARCH);
-        dispatch(dev, cmd, pl->pipelines[PASS_FILTER], pl->layouts[PASS_FILTER],
-                 fg->sets[p][SET_FILTER + k], &ofk, 1, (fg->flow_size[k].width + 15) / 16,
-                 (fg->flow_size[k].height + 3) / 4, 1);
-        profiler_mark(dev, fg, cmd, slot, STAGE_FILTER);
-        if (k > 0) {
-            dispatch(dev, cmd, pl->pipelines[PASS_SCALE], pl->layouts[PASS_SCALE],
-                     fg->sets[p][SET_SCALE + k - 1], &ofk, 1, (fg->flow_size[k - 1].width + 3) / 4,
-                     (fg->flow_size[k - 1].height + 3) / 4, 1);
-            profiler_mark(dev, fg, cmd, slot, STAGE_SCALE);
-        }
-    }
+    /* 2. Optical flow and interpolation: the pre-recorded part. */
+    execute_flow(dev, fg, cmd, slot, p, levels, companion);
 
     /* 3. The frame in between, into the target. */
-    if (target != VK_NULL_HANDLE) {
+    if (companion) {
         uint32_t out_w = fg->extent.width, out_h = fg->extent.height;
-        struct interpolate_push push = {
-            .size = {(int32_t)out_w, (int32_t)out_h},
-            .block = (int32_t)AFMF_FLOW_BLOCK,
-            .fallback = cfg->fast_motion == AFMF_RESPONSE_BLENDED_FRAMES ? 1 : 0,
-            .max_motion = AFMF_MAX_TRUSTED_MOTION,
-            .flow_scale = (float)fg->flow_scale,
-        };
-        dev->fns.cmd_push_constants(cmd, pl->layouts[PASS_INTERPOLATE], VK_SHADER_STAGE_COMPUTE_BIT,
-                                    0, (uint32_t)sizeof push, &push);
-        dispatch(dev, cmd, pl->interpolate[fg->variant], pl->layouts[PASS_INTERPOLATE],
-                 fg->sets[p][SET_INTERPOLATE], NULL, 0, (out_w + 7) / 8, (out_h + 7) / 8, 1);
-        profiler_mark(dev, fg, cmd, slot, STAGE_INTERPOLATE);
         copy_whole(dev, cmd, fg->output.image, VK_IMAGE_LAYOUT_GENERAL, target,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, fg->extent);
         profiler_mark(dev, fg, cmd, slot, STAGE_OUTPUT);

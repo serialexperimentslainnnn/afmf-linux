@@ -15,6 +15,12 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
 
 void afmf_framegen_destroy(struct afmf_device *dev, struct afmf_framegen *fg);
 
+/* The queue family afmf_framegen_record's command buffers belong to, once the caller knows it:
+ * the fixed part of a frame is then recorded once per (slot, parity, companion) into secondary
+ * command buffers of that family and only executed from then on. Without this call (or when it
+ * fails) every frame is recorded in full. */
+void afmf_framegen_set_family(struct afmf_device *dev, struct afmf_framegen *fg, uint32_t family);
+
 /* Records, into a command buffer on a compute-capable queue:
  *   1. a copy of `current` (a swapchain image in TRANSFER_SRC_OPTIMAL) into the colour ring,
  *   2. the luma pyramid and scene change detector on the new frame, and, when `target` is not

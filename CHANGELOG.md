@@ -21,6 +21,10 @@ All notable changes to afmf-linux are documented here. The format follows
   and `headless_present_id2`.
 
 ### Changed
+- The optical flow and the interpolation are recorded once per (slot, parity, companion) into
+  secondary command buffers and executed from then on; the per-frame primary keeps only the
+  copies from and to the swapchain images. Host time recording a frame in the present hook:
+  170-190 us to 80-117 us in the headless test under the validation layer.
 - Pacing measures the half-frame hold from the moment the generated frame is ready on the GPU, not
   from the present call, capped at one frame after it; the profile line shows the delay as `gpu done`.
 

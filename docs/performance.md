@@ -42,6 +42,7 @@ the pacing hold run on the layer's presentation thread.
 | Companion image acquired a frame ahead instead of waited for | host time in the present hook 5.9 ms &rarr; 60 &micro;s (FIFO desktop) |
 | Shared compute queue when the game holds every compute queue | GPU work off the graphics queue in vkd3d-proton titles |
 | Presentation thread with half-frame pacing | hook 546 &rarr; 80 &micro;s in game; generated frames evenly spaced |
+| Flow and interpolation pre-recorded into secondary command buffers | recording in the hook 170-190 &rarr; 80-117 &micro;s (headless, validation layer on) |
 
 Two things learned from the screenshots' games that are worth more than a number: id Tech 8
 (DOOM) aborts if a swapchain has more than 8 images, so `AFMF_EXTRA_IMAGES` above 5 kills it

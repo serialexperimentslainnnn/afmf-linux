@@ -319,6 +319,8 @@ static bool ensure_pool(struct afmf_device *dev, struct afmf_swapchain *sc, uint
         if (dev->set_loader_data(dev->handle, sc->slots[i].cmd) != VK_SUCCESS)
             return false;
     }
+    if (sc->fg != NULL)
+        afmf_framegen_set_family(dev, sc->fg, family);
     return true;
 }
 
@@ -477,8 +479,8 @@ static size_t chain_node_size(VkStructureType type)
  * is the chain to use. False means a structure the layer cannot copy, or no way to ask the surface:
  * the application's mode then stays. */
 static bool chain_allows_mailbox(const struct afmf_device *dev, VkSurfaceKHR surface,
-                                 const void *chain, unsigned char *storage,
-                                 VkPresentModeKHR *modes, uint32_t *mode_count, const void **out)
+                                 const void *chain, uint64_t *storage, VkPresentModeKHR *modes,
+                                 uint32_t *mode_count, const void **out)
 {
     const VkSwapchainPresentModesCreateInfoEXT *list = NULL;
     for (const VkBaseInStructure *s = chain; s != NULL; s = s->pNext)
@@ -526,7 +528,7 @@ static bool chain_allows_mailbox(const struct afmf_device *dev, VkSurfaceKHR sur
         used = (used + 15u) & ~(size_t)15u;
         if (size == 0 || used + size > AFMF_CHAIN_BYTES)
             return false;
-        VkBaseOutStructure *copy = (VkBaseOutStructure *)(storage + used);
+        VkBaseOutStructure *copy = (VkBaseOutStructure *)(storage + used / sizeof *storage);
         memcpy(copy, s, size);
         copy->pNext = NULL;
         if (copy->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT) {
@@ -552,7 +554,7 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
 
     VkSwapchainCreateInfoKHR patched = *info;
     uint32_t families[AFMF_MAX_FAMILIES];
-    _Alignas(16) unsigned char chain_storage[AFMF_CHAIN_BYTES];
+    _Alignas(16) uint64_t chain_storage[AFMF_CHAIN_BYTES / sizeof(uint64_t)];
     VkPresentModeKHR chain_modes[AFMF_MAX_PRESENT_MODES];
     uint32_t chain_mode_count = 0;
     bool async = false;

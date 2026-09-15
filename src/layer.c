@@ -35,6 +35,7 @@ struct afmf_instance {
     PFN_vkGetPhysicalDeviceMemoryProperties get_memory_properties;
     PFN_vkGetPhysicalDeviceQueueFamilyProperties get_queue_family_properties;
     PFN_vkGetPhysicalDeviceProperties get_properties;
+    PFN_vkEnumerateDeviceExtensionProperties enumerate_device_extensions;
     struct afmf_instance *next;
 };
 
@@ -137,6 +138,41 @@ static uint32_t choose_async_family(const struct afmf_device *dev, const VkDevic
         }
     }
     return UINT32_MAX;
+}
+
+static bool device_extension_available(struct afmf_instance *inst, VkPhysicalDevice pd,
+                                       const char *name)
+{
+    uint32_t count = 0;
+    if (inst->enumerate_device_extensions(pd, NULL, &count, NULL) != VK_SUCCESS || count == 0)
+        return false;
+    VkExtensionProperties *props = calloc(count, sizeof *props);
+    if (props == NULL)
+        return false;
+    bool found = false;
+    if (inst->enumerate_device_extensions(pd, NULL, &count, props) == VK_SUCCESS)
+        for (uint32_t i = 0; i < count && !found; i++)
+            found = strcmp(props[i].extensionName, name) == 0;
+    free(props);
+    return found;
+}
+
+/* The application's extension list plus `name` (unchanged when already there); caller frees. */
+static const char **extensions_with(const VkDeviceCreateInfo *info, const char *name,
+                                    uint32_t *count)
+{
+    const char **list = calloc(info->enabledExtensionCount + 1, sizeof *list);
+    if (list == NULL)
+        return NULL;
+    bool present = false;
+    for (uint32_t i = 0; i < info->enabledExtensionCount; i++) {
+        list[i] = info->ppEnabledExtensionNames[i];
+        present = present || strcmp(list[i], name) == 0;
+    }
+    *count = info->enabledExtensionCount;
+    if (!present)
+        list[(*count)++] = name;
+    return list;
 }
 
 /* Copies the application's queue requests plus one queue in `family`. The arrays are the caller's
@@ -276,8 +312,11 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateInstance(const VkInstanceCreate
             *out, "vkGetPhysicalDeviceQueueFamilyProperties");
     PFN_vkGetPhysicalDeviceProperties get_properties =
         (PFN_vkGetPhysicalDeviceProperties)next_gipa(*out, "vkGetPhysicalDeviceProperties");
+    PFN_vkEnumerateDeviceExtensionProperties enumerate_extensions =
+        (PFN_vkEnumerateDeviceExtensionProperties)next_gipa(*out,
+                                                            "vkEnumerateDeviceExtensionProperties");
     if (inst == NULL || next_destroy == NULL || get_memory == NULL || get_families == NULL ||
-        get_properties == NULL) {
+        get_properties == NULL || enumerate_extensions == NULL) {
         if (next_destroy != NULL)
             next_destroy(*out, alloc);
         free(inst);
@@ -295,6 +334,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateInstance(const VkInstanceCreate
     inst->get_memory_properties = get_memory;
     inst->get_queue_family_properties = get_families;
     inst->get_properties = get_properties;
+    inst->enumerate_device_extensions = enumerate_extensions;
 
     pthread_mutex_lock(&g_lock);
     inst->next = g_instances;
@@ -492,8 +532,46 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
             async_family = UINT32_MAX;
     }
 
-    link->u.pLayerInfo = link->u.pLayerInfo->pNext;
+    /* When the layer's queue is an entry of its own, ask for high global priority so its work is
+     * not starved by the application's, as the driver-level implementation does. amdgpu only
+     * grants it to processes with CAP_SYS_NICE (or the DRM master), so the plain request is
+     * kept as the fallback. */
+    const char **extensions = NULL;
+    VkDeviceQueueGlobalPriorityCreateInfoKHR high = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR,
+        .globalPriority = VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR,
+    };
+    bool own_entry = async_family != UINT32_MAX &&
+                     patched.queueCreateInfoCount == info->queueCreateInfoCount + 1;
+    bool try_high = own_entry && device_extension_available(inst, physical_device,
+                                                            VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
+    if (try_high) {
+        extensions = extensions_with(info, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME,
+                                     &patched.enabledExtensionCount);
+        try_high = extensions != NULL;
+    }
+    if (try_high) {
+        patched.ppEnabledExtensionNames = extensions;
+        high.pNext = queues[patched.queueCreateInfoCount - 1].pNext;
+        queues[patched.queueCreateInfoCount - 1].pNext = &high;
+    }
+
+    /* Every layer below advances the chain link as it goes, so a retry has to put it back to
+     * where this layer left it. */
+    VkLayerDeviceLink *next_link = link->u.pLayerInfo->pNext;
+    link->u.pLayerInfo = next_link;
     VkResult res = next_create(physical_device, &patched, alloc, out);
+    if (res != VK_SUCCESS && try_high) {
+        /* Not permitted (or not liked): the same device without the priority request. */
+        link->u.pLayerInfo = next_link;
+        queues[patched.queueCreateInfoCount - 1].pNext = high.pNext;
+        patched.ppEnabledExtensionNames = info->ppEnabledExtensionNames;
+        patched.enabledExtensionCount = info->enabledExtensionCount;
+        try_high = false;
+        res = next_create(physical_device, &patched, alloc, out);
+    }
+    dev->async_high_priority = try_high;
+    free(extensions);
     free(queues);
     free(priorities);
     if (res != VK_SUCCESS) {
@@ -528,8 +606,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
     pthread_mutex_unlock(&g_lock);
 
     if (dev->async_queue != VK_NULL_HANDLE)
-        AFMF_INFO("device %p created, VK_KHR_swapchain %s, layer queue on family %u", (void *)*out,
-                  dev->fns.queue_present != NULL ? "enabled" : "not enabled", dev->async_family);
+        AFMF_INFO("device %p created, VK_KHR_swapchain %s, layer queue on family %u (%s priority)",
+                  (void *)*out, dev->fns.queue_present != NULL ? "enabled" : "not enabled",
+                  dev->async_family, dev->async_high_priority ? "high" : "normal");
     else
         AFMF_INFO("device %p created, VK_KHR_swapchain %s, no spare compute queue: working on "
                   "the application's",

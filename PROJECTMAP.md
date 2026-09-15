@@ -100,6 +100,11 @@ shaders, the driver or the resolution change; review this table with every optim
 - **Nothing graphics-only on the layer's command buffers**: they run on a compute family;
   `vkCmdBlitImage` there is a validation error and a failed submit. Copies, clears and dispatches
   are fine.
+- **Never call down `vkCreateDevice` twice without restoring the chain link**: every layer below
+  advances `VkLayerDeviceCreateInfo::u.pLayerInfo`; a retry (used when high queue priority is
+  refused) must reset it to the link this layer handed down, or the next layer dereferences NULL.
+- **High global priority for the layer's queue needs `CAP_SYS_NICE`** (amdgpu's rule for anything
+  above NORMAL); a regular game process gets the fallback and the log says `(normal priority)`.
 - **Async queue semantics**: swapchains are re-created `CONCURRENT` across the application's
   families and ours so images i/j need no ownership transfers; both presents happen on our queue
   (RADV reports present support on its compute family; checked per surface, fallback is the

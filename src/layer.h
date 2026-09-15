@@ -116,6 +116,7 @@ struct afmf_device {
      * swapchains shared with `async_family`. */
     VkQueue async_queue;
     uint32_t async_family;
+    bool async_high_priority; /* VK_KHR_global_priority HIGH was granted for it */
     pthread_mutex_t async_lock; /* the application may present from several threads */
     uint32_t *app_families;
     uint32_t app_family_count;

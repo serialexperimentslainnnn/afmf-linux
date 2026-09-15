@@ -208,10 +208,11 @@ saturates the GPU; in FIFO at the display's refresh rate there is no room for co
 ctest --test-dir build --output-on-failure
 ```
 
-`headless`, `headless_performance` and `headless_shared_queue` run the layer under the Khronos
-validation layer on a headless surface, present 120 frames of a synthetic moving square, require
-119 generated frames and check that the generated frames show the square exactly halfway between
-the real ones. They need a GPU, so CI only builds, lints and runs the static analyser.
+`headless`, `headless_performance`, `headless_shared_queue` and `headless_gamescope` run the layer
+under the Khronos validation layer on a headless surface, present 120 frames of a synthetic
+moving square, require 119 generated frames and check that the generated frames show the square
+exactly halfway between the real ones; `headless_gamescope_passive` runs the same binary under
+the name `gamescope` and requires the layer to pass every swapchain through. They need a GPU, so CI only builds, lints and runs the static analyser.
 `tests/smoke.sh` opens `vkcube` with the layer enabled implicitly and once more with it disabled.
 
 A sanitizer build is one option away: `cmake -S . -B build-asan -DAFMF_SANITIZE=ON`.

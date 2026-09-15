@@ -37,7 +37,7 @@ has no interpolation variant fall back to repeating the previous frame.
 | Layer manifest (name, enable/disable env vars) | `layer/afmf-linux.json.in` | Generated twice: build tree path and install path |
 | Build flags, shader compilation, sanitizers, tests, install | `CMakeLists.txt` | `afmf_glsl()`, `AFMF_WARNINGS`, `AFMF_SANITIZE`, `add_test(headless)`, `install()` |
 | SPIR-V embedding | `cmake/embed_spirv.cmake` | `.spv` -> `uint32_t` arrays in `build/shaders/afmf_spirv.h` |
-| Headless integration test (validation, generation count, golden check) | `tests/headless.c` | Synthetic sliding square; reads the layer's PPM dumps; `AFMF_TEST_ALL_QUEUES=1` takes every compute queue like vkd3d-proton (ctest `headless_shared_queue`); `AFMF_TEST_FRAMES`, `AFMF_TEST_FRAME_MS` pace it like a game to see the pacing hold |
+| Headless integration test (validation, generation count, golden check) | `tests/headless.c` | Synthetic sliding square; reads the layer's PPM dumps; `AFMF_TEST_ALL_QUEUES=1` takes every compute queue like vkd3d-proton (ctest `headless_shared_queue`); `AFMF_TEST_FRAMES`, `AFMF_TEST_FRAME_MS` pace it like a game to see the pacing hold; `AFMF_TEST_EXTRA_IMAGES=n` requires n images added (ctest `headless_gamescope`); a copy of the binary named `gamescope` under `build/tests-as/` checks the pass-through of the gamescope process (ctest `headless_gamescope_passive`) |
 | Real-window smoke test | `tests/smoke.sh` | vkcube, implicit enable via `AFMF_ENABLE=1`, negative control |
 
 ## Structure

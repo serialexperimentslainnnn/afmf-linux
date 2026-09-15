@@ -292,6 +292,18 @@ static bool create_device_and_swapchain(struct ctx *ctx)
     };
     CHECK(vkCreateSwapchainKHR(ctx->device, &swapchain, NULL, &ctx->swapchain));
 
+    /* AFMF_TEST_EXTRA_IMAGES=<n>: the layer must have added at least n images to what was asked
+     * (the driver may round up on its own, so only the lower bound is checked). */
+    uint32_t got = 0;
+    CHECK(vkGetSwapchainImagesKHR(ctx->device, ctx->swapchain, &got, NULL));
+    const char *extra = getenv("AFMF_TEST_EXTRA_IMAGES");
+    long expected = extra != NULL ? strtol(extra, NULL, 10) : 0;
+    (void)fprintf(stderr, "swapchain has %u images (asked %u)\n", got, image_count);
+    if (expected > 0 && got < image_count + (uint32_t)expected) {
+        (void)fprintf(stderr, "expected at least %u images\n", image_count + (uint32_t)expected);
+        return false;
+    }
+
     VkCommandPoolCreateInfo pool = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,

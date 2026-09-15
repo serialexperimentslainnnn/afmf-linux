@@ -4,13 +4,17 @@ What only the repository owner can do, in order. Everything else is in the repos
 
 ## Once, after the first push
 
-1. **Pages**: Settings → Pages → Source "Deploy from a branch", branch `main`, folder `/docs`.
-   The site builds with GitHub's own Jekyll (3.10, plugin allowlist: seo-tag, sitemap, feed).
-   First build shows under Actions → "pages build and deployment". Check
-   `https://serialexperimentslainnnn.github.io/afmf-linux/sitemap.xml` and `/robots.txt`.
+1. **Pages**: Settings → Pages → Source "Deploy from a branch", branch `main`, folder `/docs`;
+   custom domain `afmf-linux.digitalexperiments.dev` (`docs/CNAME`), DNS: a CNAME to
+   `serialexperimentslainnnn.github.io` **without a proxy in front** (Cloudflare grey cloud)
+   until GitHub has issued the certificate and "Enforce HTTPS" is on; a proxied record hides the
+   CNAME from GitHub's check and the certificate never comes. The site builds with GitHub's own
+   Jekyll (3.10, plugin allowlist: seo-tag, sitemap, feed). Check
+   `https://afmf-linux.digitalexperiments.dev/sitemap.xml` and `/robots.txt`.
+   `https://serialexperimentslainnnn.github.io/afmf-linux/` redirects there.
 2. **About** (repository sidebar, gear icon):
    - Description: `AMD Fluid Motion Frames for Linux: open-source Vulkan frame generation layer (AFMF) for any game — Proton, DXVK, vkd3d-proton, native. Optical flow interpolation, half-frame pacing, RADV/RDNA. No kernel module, no Mesa patch.`
-   - Website: `https://serialexperimentslainnnn.github.io/afmf-linux/`
+   - Website: `https://afmf-linux.digitalexperiments.dev/`
    - Topics: `amd afmf fluid-motion-frames frame-generation frame-gen vulkan vulkan-layer linux-gaming proton steam dxvk vkd3d-proton radv mesa rdna4 rdna3 fidelityfx optical-flow interpolation c`
 3. **Social preview**: Settings → General → Social preview → upload `docs/assets/og.png`
    (GitHub does not take it from the repository).
@@ -38,9 +42,9 @@ What only the repository owner can do, in order. Everything else is in the repos
 
 ## Search presence
 
-- Google Search Console: add the property `https://serialexperimentslainnnn.github.io/afmf-linux/`
-  (DNS is not available for a `github.io` subpath; use the HTML file or meta tag method, drop the
-  tag into `docs/_layouts/default.html` `<head>`), submit `sitemap.xml`.
+- Google Search Console: add the **Domain** property `afmf-linux.digitalexperiments.dev` (verify
+  with the TXT record it gives you, at the DNS provider), submit `sitemap.xml`, request indexing
+  of `/` and `/install/`.
 - Bing Webmaster Tools: import from Search Console.
 - Post the release where Linux gamers read: r/linux_gaming, GamingOnLinux (they cover this kind
   of project), Phoronix forums, the CachyOS and Bazzite forums. Link the site, not the repo: the

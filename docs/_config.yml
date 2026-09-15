@@ -5,8 +5,8 @@ description: >-
   Open-source AMD Fluid Motion Frames (AFMF) for Linux: a Vulkan frame generation layer that
   doubles the frame rate of any game, Proton or native, on RADV and AMD RDNA GPUs. Optical flow
   interpolation, half-frame pacing, no kernel module, no driver patch.
-url: https://serialexperimentslainnnn.github.io
-baseurl: /afmf-linux
+url: https://afmf-linux.digitalexperiments.dev
+baseurl: ""
 lang: en
 repository: serialexperimentslainnnn/afmf-linux
 author:

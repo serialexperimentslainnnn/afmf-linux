@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://serialexperimentslainnnn.github.io/afmf-linux/sitemap.xml
+Sitemap: https://afmf-linux.digitalexperiments.dev/sitemap.xml

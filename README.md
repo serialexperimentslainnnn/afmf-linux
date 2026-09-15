@@ -139,7 +139,7 @@ Windows (search mode, performance mode, fast motion response) where such a setti
 | `AFMF_PERFORMANCE_MODE` | `auto` | `quality`: optical flow at display resolution (8 px blocks). `performance`: at half resolution (16 px blocks), about 2.5x cheaper. `auto`: `performance` from 2560x1440 up |
 | `AFMF_SEARCH_MODE` | `auto` | `standard`: 5 pyramid levels. `high`: 7 levels, motion up to +-512 flow pixels. `auto`: 7 at full resolution, 5 at half |
 | `AFMF_FAST_MOTION_RESPONSE` | `repeat` | What to show where the flow is unreliable: `repeat` the previous frame, or `blend` both |
-| `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory |
+| `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory. Gamescope needs `4` or `5`; some engines abort above 8 images in total (id Tech 8) |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest the layer waits for the companion's image to be released before presenting the real frame alone. The image is requested a frame ahead, so the default never stalls the game |
 | `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue and presents inline (diagnosis) |
 | `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: uneven cadence, the compositor may drop generated frames |
@@ -192,7 +192,10 @@ see Status.
 
 **Gamescope? HDR?** HDR10 and scRGB swapchains are interpolated (10-bit and 16-bit float
 variants). Whether the game gets HDR at all is between Wine, the compositor and Mesa, not the
-layer. Gamescope is untested.
+layer. Gamescope works with `AFMF_EXTRA_IMAGES=4` or `5`: it keeps more swapchain images in flight
+than a desktop compositor, so the default 2 leaves most presents without a free image for the
+companion (31 % generated in a test with gamescope 3.16; 86 % with 4 extra, all of them with 5).
+The Steam Deck itself (RDNA2) is untested.
 
 **Why is my frame rate not exactly double?** The ceiling is 2x the base the game reaches on Linux
 without the layer (`DISABLE_AFMF=1` to measure it), minus GPU contention when the game already

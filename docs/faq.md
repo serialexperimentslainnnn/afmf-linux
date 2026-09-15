@@ -21,7 +21,7 @@ faq:
   - q: Why is my frame rate not exactly double?
     a: The ceiling is twice the base the game reaches on Linux without the layer, minus GPU contention when the game already saturates the GPU. In FIFO at the display's refresh rate there is no free image for companions.
   - q: Does it work with Gamescope?
-    a: Untested. Gamescope has its own WSI layer between the game and the compositor.
+    a: Yes, with AFMF_EXTRA_IMAGES=4 or 5. Gamescope keeps more swapchain images in flight than a desktop compositor, so with the default 2 extra images most presents find no free image for the companion (31 percent generated in a test with gamescope 3.16 at 165 Hz); 4 extra gave 86 percent and 5 gave every present one. The Steam Deck itself (RDNA2, Gamescope as the session) is untested; reports welcome.
   - q: Is it safe? It loads into every Vulkan process.
     a: It is mapped into every Vulkan process but does nothing unless AFMF_ENABLE=1 is set. It reads only AFMF_* variables, writes files only when AFMF_DUMP_DIR is set, opens no sockets and spawns nothing. See SECURITY.md.
 ---
@@ -45,7 +45,7 @@ GPUs and compositors are welcome as issues; the template asks for the log.
 The presentation engine had no image to give for the companion, so that real frame went out
 alone. It is normal for a game in FIFO that already runs at the display's refresh rate (every slot
 is taken) and otherwise rare; a steady count usually means `AFMF_EXTRA_IMAGES` is too low for that
-compositor.
+compositor (Gamescope needs 4 or 5).
 
 ## Why 64-bit only?
 

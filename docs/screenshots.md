@@ -11,7 +11,7 @@ RX 9070 XT, Mesa 26.1.8 RADV, KDE Plasma Wayland, all at **3440&times;1440 (21:9
 the real frames. **Click a capture to open it at full 3440&times;1440.** Under each one, the
 graphics settings and the full Steam launch options used.
 
-{% assign common = "SteamDeck=0 PROTON_ENABLE_WAYLAND=1 MANGOHUD=1 DXVK_HDR=1 PROTON_FSR4_UPGRADE=1 PROTON_MLFG_UPGRADE=1 WINE_VK_USE_SYNC2=1 PROTON_PRIORITY_HIGH=1 PROTON_DISCORD_BRIDGE=1 PROTON_PREFER_SDL=1 PROTON_NO_STEAMINPUT=1 MESA_VK_WSI_PRESENT_MODE=mailbox AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=repeat AFMF_PACING=0 game-performance %command%" %}
+{% assign common = "SteamDeck=0 PROTON_ENABLE_WAYLAND=1 MANGOHUD=1 DXVK_HDR=1 PROTON_FSR4_UPGRADE=1 PROTON_MLFG_UPGRADE=1 WINE_VK_USE_SYNC2=1 PROTON_PRIORITY_HIGH=1 PROTON_DISCORD_BRIDGE=1 PROTON_PREFER_SDL=1 PROTON_NO_STEAMINPUT=1 MESA_VK_WSI_PRESENT_MODE=mailbox AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=repeat game-performance %command%" %}
 
 ## Monster Hunter Wilds &mdash; 265 fps
 
@@ -85,8 +85,9 @@ RADV_PERFTEST=sam,nggc,rtcps {{ common }}
 ## About the common part
 
 `AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=repeat` is the layer with AMD's
-"high" search preset; `AFMF_PACING=0` is a personal choice (no hold on the real frame), leave it
-out for the evenly spaced cadence. `PROTON_ENABLE_WAYLAND=1 DXVK_HDR=1` give Wine's Wayland driver
+"high" search preset. (The captures were taken with `AFMF_PACING=0` as well, a personal choice: no
+hold on the real frame, at the cost of an uneven cadence that some compositors show as stutter.
+It is not in the lines above on purpose: leave pacing on.) `PROTON_ENABLE_WAYLAND=1 DXVK_HDR=1` give Wine's Wayland driver
 and HDR; `PROTON_FSR4_UPGRADE=1 PROTON_MLFG_UPGRADE=1` FSR 4 in games that ship FSR 3.1;
 `MESA_VK_WSI_PRESENT_MODE=mailbox` removes vsync throttling; `game-performance` is CachyOS's
 performance wrapper (`gamemoderun` elsewhere, or nothing); the rest is Proton housekeeping. With

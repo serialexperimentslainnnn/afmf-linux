@@ -3,6 +3,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+enum afmf_performance_mode {
+    AFMF_PERFORMANCE_AUTO = 0,    /* half-resolution flow from 2560x1440 upwards */
+    AFMF_PERFORMANCE_QUALITY = 1, /* optical flow at display resolution */
+    AFMF_PERFORMANCE_FAST = 2,    /* optical flow at half resolution, 16-pixel blocks on screen */
+};
+
 enum afmf_fast_motion_response {
     AFMF_RESPONSE_REPEAT_FRAMES = 0, /* untrusted pixels show the previous frame again */
     AFMF_RESPONSE_BLENDED_FRAMES = 1, /* untrusted pixels blend the two frames without motion */
@@ -15,8 +21,10 @@ struct afmf_config {
     bool interpolate;            /* AFMF_INTERPOLATE=0 falls back to repeating the previous frame */
     uint32_t flow_levels;        /* AFMF_SEARCH_MODE: optical flow pyramid levels, 5 standard, 7 high */
     enum afmf_fast_motion_response fast_motion; /* AFMF_FAST_MOTION_RESPONSE: repeat | blend */
+    enum afmf_performance_mode performance;     /* AFMF_PERFORMANCE_MODE: auto | quality | performance */
     const char *dump_dir;        /* AFMF_DUMP_DIR: where the first generated frames are written as PPM */
     bool profile;                /* AFMF_PROFILE=1 (or AFMF_LOG=3): GPU time per pass, logged periodically */
+    bool async;                  /* AFMF_ASYNC=0 keeps the work on the application's queue */
     bool invalid;                /* some variable was set but unparsable; caller reports it */
 };
 

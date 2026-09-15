@@ -481,7 +481,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
     VkDeviceQueueCreateInfo *queues = NULL;
     float *priorities = NULL;
     uint32_t async_index = 0;
-    uint32_t async_family = dev->set_loader_data != NULL
+    uint32_t async_family = dev->set_loader_data != NULL && afmf_config_get()->async
                                 ? choose_async_family(dev, info, &async_index)
                                 : UINT32_MAX;
     if (async_family != UINT32_MAX) {

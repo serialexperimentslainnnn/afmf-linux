@@ -65,11 +65,16 @@ static void init(void)
      * (+-512 px); auto picks high. */
     long flow_levels = 7;
     long fast_motion = AFMF_RESPONSE_REPEAT_FRAMES;
+    long performance = AFMF_PERFORMANCE_AUTO;
     long profile = 0;
+    long async = 1;
 
     static const struct choice search_modes[] = {{"auto", 7}, {"standard", 5}, {"high", 7}};
     static const struct choice responses[] = {{"repeat", AFMF_RESPONSE_REPEAT_FRAMES},
                                              {"blend", AFMF_RESPONSE_BLENDED_FRAMES}};
+    static const struct choice performance_modes[] = {{"auto", AFMF_PERFORMANCE_AUTO},
+                                                     {"quality", AFMF_PERFORMANCE_QUALITY},
+                                                     {"performance", AFMF_PERFORMANCE_FAST}};
 
     bool ok = read_bounded("AFMF_LOG", AFMF_LOG_ERROR, AFMF_LOG_DEBUG, &log_level);
     ok = read_bounded("AFMF_EXTRA_IMAGES", 1, 8, &extra_images) && ok;
@@ -78,6 +83,8 @@ static void init(void)
     ok = read_choice("AFMF_SEARCH_MODE", search_modes, 3, &flow_levels) && ok;
     ok = read_choice("AFMF_FAST_MOTION_RESPONSE", responses, 2, &fast_motion) && ok;
     ok = read_bounded("AFMF_PROFILE", 0, 1, &profile) && ok;
+    ok = read_bounded("AFMF_ASYNC", 0, 1, &async) && ok;
+    ok = read_choice("AFMF_PERFORMANCE_MODE", performance_modes, 3, &performance) && ok;
 
     g_config.log_level = (int)log_level;
     g_config.extra_images = (uint32_t)extra_images;
@@ -85,9 +92,11 @@ static void init(void)
     g_config.interpolate = interpolate != 0;
     g_config.flow_levels = (uint32_t)flow_levels;
     g_config.fast_motion = (enum afmf_fast_motion_response)fast_motion;
+    g_config.performance = (enum afmf_performance_mode)performance;
     const char *dump_dir = getenv("AFMF_DUMP_DIR");
     g_config.dump_dir = dump_dir != NULL && *dump_dir != '\0' ? dump_dir : NULL;
     g_config.profile = profile != 0 || log_level >= AFMF_LOG_DEBUG;
+    g_config.async = async != 0;
     g_config.invalid = !ok;
 }
 

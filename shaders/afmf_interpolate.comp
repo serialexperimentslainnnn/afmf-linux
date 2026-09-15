@@ -29,9 +29,10 @@ layout(set = 0, binding = 4, AFMF_OUT_FORMAT) uniform image2D u_out;
 
 layout(push_constant) uniform Params {
     ivec2 size;          // output size in pixels
-    int block;           // optical flow block size (8)
+    int block;           // optical flow block size (8), in flow-resolution pixels
     int fallback;        // 0 repeat previous frame, 1 blend without motion
-    float max_motion;    // |v| above which the flow is not trusted, in pixels
+    float max_motion;    // |v| above which the flow is not trusted, in output pixels
+    float flow_scale;    // output pixels per flow-resolution pixel (1 or 2)
 } p;
 
 const int SCD_SCENE_CHANGE_SLOT = 0;
@@ -41,7 +42,7 @@ const int SCD_HISTORY_BITS_SLOT = 1;
 // has no 8-pixel steps.
 vec2 flow_at(vec2 y)
 {
-    vec2 b = y / float(p.block) - 0.5;
+    vec2 b = y / (float(p.block) * p.flow_scale) - 0.5;
     ivec2 b0 = ivec2(floor(b));
     vec2 f = b - vec2(b0);
     ivec2 last = textureSize(u_flow, 0) - 1;
@@ -51,7 +52,7 @@ vec2 flow_at(vec2 y)
     vec2 v10 = vec2(texelFetch(u_flow, ivec2(b1.x, b0.y), 0).xy);
     vec2 v01 = vec2(texelFetch(u_flow, ivec2(b0.x, b1.y), 0).xy);
     vec2 v11 = vec2(texelFetch(u_flow, ivec2(b1.x, b1.y), 0).xy);
-    return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+    return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y) * p.flow_scale;
 }
 
 void main()

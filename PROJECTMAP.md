@@ -15,6 +15,7 @@ has no interpolation variant fall back to repeating the previous frame.
 |---|---|---|
 | The interpolation maths (warp, fallback, block filtering) | `shaders/afmf_interpolate.comp` | 4 output-format variants compiled by CMake |
 | Per-stage GPU timing | `src/framegen.c` `profiler_*` | Query pool per slot, read on slot reuse, never blocks |
+| Half-resolution flow input | `shaders/afmf_downsample.comp`, `src/framegen.c` `PASS_DOWNSAMPLE` | Compute, not vkCmdBlitImage: blits need a graphics queue |
 | Optical flow sequencing, resources, descriptor sets | `src/framegen.c` | `afmf_framegen_record` = 1 copy + 7 FFX passes (x levels) + interpolate |
 | Which swapchain formats interpolate and how | `src/framegen.c` `describe_format` | R8G8B8A8, B8G8R8A8 (+sRGB), A2B10G10R10, R16G16B16A16F |
 | FidelityFX sources (never edited) | `shaders/fidelityfx/` | `NOTICE.md` has tag, commit and mapping |
@@ -60,6 +61,8 @@ has no interpolation variant fall back to repeating the previous frame.
 | `AFMF_FAST_MOTION_RESPONSE` | `repeat` | `repeat` or `blend` for pixels the flow cannot trust (scene change, > 64 px) |
 | `AFMF_DUMP_DIR` | unset | Writes the first 4 generated frames as `afmf_generated_<n>.ppm` (8-bit formats) |
 | `AFMF_PROFILE` | `0` | `1` (or `AFMF_LOG=3`) logs GPU time per stage every 300 frames and at teardown |
+| `AFMF_PERFORMANCE_MODE` | `auto` | `quality` = flow at display resolution, `performance` = at half (16 px blocks); `auto` = performance from 2560x1440 up |
+| `AFMF_ASYNC` | `1` | `0` keeps the work on the application's queue (diagnosis, fallback) |
 
 ## Performance register
 Method: `AFMF_TEST_EXTENT=3440x1440 AFMF_PROFILE=1 ./build/afmf_headless`, GPU timestamps per
@@ -70,6 +73,7 @@ shaders, the driver or the resolution change; review this table with every optim
 |---|---|---|---|---|
 | 2026-09-15 | `631b0c0` + profiler | 1222 us | block search 85 % (1038 us); everything else < 40 us each | Baseline; all on the application's queue |
 | 2026-09-15 | async queue | 1222 us (unchanged) | same | Work and presents moved to the layer's compute queue (RADV family 1); headless host critical path 5.58 -> 4.82 ms median of 3 (host is upload-bound, not a game proxy) |
+| 2026-09-15 | performance mode | 493 us on the app queue (quality 1224) | search 331 us (67 %) | Flow at half resolution; golden test identical. On the compute queue the same work reads 1395 us (quality 4329) of wall time: the ACE shares the GPU with graphics and the idle host lowers clocks; the host's own frame is still shorter with async (4.24 vs 4.70 ms) |
 
 ## Commands
 | What | Command | Verified |
@@ -93,6 +97,9 @@ shaders, the driver or the resolution change; review this table with every optim
 - Commits: Conventional Commits, signed, as `Lain <lain@digitalexperiments.dev>`, no tool trailers.
 
 ## Minefields
+- **Nothing graphics-only on the layer's command buffers**: they run on a compute family;
+  `vkCmdBlitImage` there is a validation error and a failed submit. Copies, clears and dispatches
+  are fine.
 - **Async queue semantics**: swapchains are re-created `CONCURRENT` across the application's
   families and ours so images i/j need no ownership transfers; both presents happen on our queue
   (RADV reports present support on its compute family; checked per surface, fallback is the

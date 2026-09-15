@@ -62,6 +62,7 @@ enum pass {
     PASS_FILTER,
     PASS_SCALE,
     PASS_INTERPOLATE,
+    PASS_DOWNSAMPLE,
     PASS_COUNT
 };
 
@@ -82,6 +83,7 @@ static const VkDescriptorType bindings_search[] = {SAMPLED, SAMPLED, STORAGE, ST
 static const VkDescriptorType bindings_filter[] = {SAMPLED, STORAGE, UBO};
 static const VkDescriptorType bindings_scale[] = {SAMPLED, SAMPLED, SAMPLED, STORAGE, STORAGE, UBO};
 static const VkDescriptorType bindings_interpolate[] = {COMBINED, COMBINED, SAMPLED, STORAGE, STORAGE};
+static const VkDescriptorType bindings_downsample[] = {COMBINED, STORAGE};
 
 struct pass_desc {
     const uint32_t *spirv;
@@ -96,6 +98,11 @@ struct interpolate_push {
     int32_t block;
     int32_t fallback;
     float max_motion;
+    float flow_scale;
+};
+
+struct downsample_push {
+    int32_t size[2];
 };
 
 #define PASS(name, spv, push)                                                                     \
@@ -111,6 +118,21 @@ static const struct pass_desc passes[PASS_COUNT] = {
     [PASS_SCALE] = PASS(scale, ffx_opticalflow_scale_optical_flow_advanced_pass_v5_spv, 0),
     [PASS_INTERPOLATE] = PASS(interpolate, afmf_interpolate_rgba8_spv,
                               (uint32_t)sizeof(struct interpolate_push)),
+    [PASS_DOWNSAMPLE] = PASS(downsample, afmf_downsample_rgba8_spv,
+                             (uint32_t)sizeof(struct downsample_push)),
+};
+
+/* Half-resolution colour for the flow: 8-bit unless the source is scRGB half floats. */
+enum half_variant { HALF_RGBA8, HALF_RGBA16F, HALF_COUNT };
+
+static const struct {
+    const uint32_t *spirv;
+    size_t spirv_size;
+    VkFormat format;
+} downsample_variants[HALF_COUNT] = {
+    [HALF_RGBA8] = {afmf_downsample_rgba8_spv, afmf_downsample_rgba8_spv_size, VK_FORMAT_R8G8B8A8_UNORM},
+    [HALF_RGBA16F] = {afmf_downsample_rgba16f_spv, afmf_downsample_rgba16f_spv_size,
+                      VK_FORMAT_R16G16B16A16_SFLOAT},
 };
 
 static const struct {
@@ -128,8 +150,9 @@ static const struct {
 struct afmf_framegen_pipelines {
     VkDescriptorSetLayout set_layouts[PASS_COUNT];
     VkPipelineLayout layouts[PASS_COUNT];
-    VkPipeline pipelines[PASS_COUNT]; /* PASS_INTERPOLATE unused: see interpolate[] */
+    VkPipeline pipelines[PASS_COUNT]; /* PASS_INTERPOLATE / PASS_DOWNSAMPLE unused: see below */
     VkPipeline interpolate[VARIANT_COUNT];
+    VkPipeline downsample[HALF_COUNT];
 };
 
 static VkResult create_compute_pipeline(struct afmf_device *dev, const uint32_t *spirv,
@@ -169,6 +192,9 @@ void afmf_framegen_pipelines_destroy(struct afmf_device *dev)
     for (uint32_t v = 0; v < VARIANT_COUNT; v++)
         if (p->interpolate[v] != VK_NULL_HANDLE)
             dev->fns.destroy_pipeline(dev->handle, p->interpolate[v], NULL);
+    for (uint32_t v = 0; v < HALF_COUNT; v++)
+        if (p->downsample[v] != VK_NULL_HANDLE)
+            dev->fns.destroy_pipeline(dev->handle, p->downsample[v], NULL);
     for (uint32_t i = 0; i < PASS_COUNT; i++) {
         if (p->pipelines[i] != VK_NULL_HANDLE)
             dev->fns.destroy_pipeline(dev->handle, p->pipelines[i], NULL);
@@ -224,7 +250,7 @@ static VkResult pipelines_create(struct afmf_device *dev)
         if (res != VK_SUCCESS)
             return res;
 
-        if (i == PASS_INTERPOLATE)
+        if (i == PASS_INTERPOLATE || i == PASS_DOWNSAMPLE)
             continue;
         res = create_compute_pipeline(dev, pass->spirv, pass->spirv_size, p->layouts[i],
                                       &p->pipelines[i]);
@@ -235,6 +261,13 @@ static VkResult pipelines_create(struct afmf_device *dev)
         VkResult res = create_compute_pipeline(dev, interpolate_variants[v].spirv,
                                                interpolate_variants[v].spirv_size,
                                                p->layouts[PASS_INTERPOLATE], &p->interpolate[v]);
+        if (res != VK_SUCCESS)
+            return res;
+    }
+    for (uint32_t v = 0; v < HALF_COUNT; v++) {
+        VkResult res = create_compute_pipeline(dev, downsample_variants[v].spirv,
+                                               downsample_variants[v].spirv_size,
+                                               p->layouts[PASS_DOWNSAMPLE], &p->downsample[v]);
         if (res != VK_SUCCESS)
             return res;
     }
@@ -271,11 +304,16 @@ enum set_index {
     SET_FILTER = SET_SEARCH + 7, /* + level, 7 */
     SET_SCALE = SET_FILTER + 7,  /* + level - 1, 6 */
     SET_INTERPOLATE = SET_SCALE + 6,
+    SET_DOWNSAMPLE,
     SET_COUNT
 };
 
 struct afmf_framegen {
     VkExtent2D extent;
+    VkExtent2D of_extent;   /* what the optical flow sees: extent, or half of it in performance mode */
+    uint32_t flow_scale;    /* extent / of_extent: 1 or 2 */
+    struct image color_half; /* of_extent-sized downscale of the new frame; unused when scale is 1 */
+    enum half_variant half;
     VkFormat color_format; /* UNORM sibling of the swapchain format: same bytes, no sRGB decode */
     VkFormat out_format;
     enum variant variant;
@@ -475,13 +513,13 @@ static VkResult resources_create(struct afmf_device *dev, struct afmf_framegen *
                                        VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     VkResult res;
 
-    /* Luma pyramid: level k is the input resolution >> k; flow: 8x8 blocks, then halved. */
+    /* Luma pyramid: level k is the flow resolution >> k; flow: 8x8 blocks, then halved. */
     for (uint32_t k = 0; k < AFMF_LEVELS; k++) {
-        fg->luma_size[k].width = fg->extent.width >> k ? fg->extent.width >> k : 1u;
-        fg->luma_size[k].height = fg->extent.height >> k ? fg->extent.height >> k : 1u;
+        fg->luma_size[k].width = fg->of_extent.width >> k ? fg->of_extent.width >> k : 1u;
+        fg->luma_size[k].height = fg->of_extent.height >> k ? fg->of_extent.height >> k : 1u;
         if (k == 0) {
-            fg->flow_size[0].width = (fg->extent.width + AFMF_FLOW_BLOCK - 1) / AFMF_FLOW_BLOCK;
-            fg->flow_size[0].height = (fg->extent.height + AFMF_FLOW_BLOCK - 1) / AFMF_FLOW_BLOCK;
+            fg->flow_size[0].width = (fg->of_extent.width + AFMF_FLOW_BLOCK - 1) / AFMF_FLOW_BLOCK;
+            fg->flow_size[0].height = (fg->of_extent.height + AFMF_FLOW_BLOCK - 1) / AFMF_FLOW_BLOCK;
         } else {
             fg->flow_size[k].width = (fg->flow_size[k - 1].width + 1) / 2;
             fg->flow_size[k].height = (fg->flow_size[k - 1].height + 1) / 2;
@@ -513,9 +551,16 @@ static VkResult resources_create(struct afmf_device *dev, struct afmf_framegen *
     if (res != VK_SUCCESS)
         return res;
 
-    const VkImageUsageFlags colour = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    const VkImageUsageFlags colour = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     for (uint32_t parity = 0; parity < 2; parity++) {
         res = image_create(dev, &fg->color[parity], fg->color_format, fg->extent, colour);
+        if (res != VK_SUCCESS)
+            return res;
+    }
+    if (fg->flow_scale > 1) {
+        res = image_create(dev, &fg->color_half, downsample_variants[fg->half].format, fg->of_extent,
+                           VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         if (res != VK_SUCCESS)
             return res;
     }
@@ -807,7 +852,7 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
     const struct afmf_framegen_pipelines *pl = dev->framegen_pipelines;
 
     VkDescriptorPoolSize sizes[] = {
-        {SAMPLED, 2 * 42}, {STORAGE, 2 * 48}, {COMBINED, 2 * 2}, {UBO, 2 * 25},
+        {SAMPLED, 2 * 42}, {STORAGE, 2 * 49}, {COMBINED, 2 * 3}, {UBO, 2 * 25},
     };
     VkDescriptorPoolCreateInfo pool = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -831,6 +876,7 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
     for (uint32_t k = 1; k < AFMF_LEVELS; k++)
         layouts[SET_SCALE + k - 1] = pl->set_layouts[PASS_SCALE];
     layouts[SET_INTERPOLATE] = pl->set_layouts[PASS_INTERPOLATE];
+    layouts[SET_DOWNSAMPLE] = pl->set_layouts[PASS_DOWNSAMPLE];
 
     for (uint32_t p = 0; p < 2; p++) {
         VkDescriptorSetAllocateInfo alloc = {
@@ -849,7 +895,8 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
         struct set_writer w;
 
         writer_begin(&w, dev, fg->sets[p][SET_PREPARE]);
-        writer_image(&w, 0, SAMPLED, fg->color[p].view, VK_NULL_HANDLE);
+        writer_image(&w, 0, SAMPLED, fg->flow_scale > 1 ? fg->color_half.view : fg->color[p].view,
+                     VK_NULL_HANDLE);
         writer_image(&w, 1, STORAGE, fg->luma[p][0].view, VK_NULL_HANDLE);
         writer_ubo(&w, 2, fg->cb);
         writer_end(&w);
@@ -913,6 +960,13 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
         writer_image(&w, 3, STORAGE, fg->scd_output.view, VK_NULL_HANDLE);
         writer_image(&w, 4, STORAGE, fg->output.view, VK_NULL_HANDLE);
         writer_end(&w);
+
+        if (fg->flow_scale > 1) {
+            writer_begin(&w, dev, fg->sets[p][SET_DOWNSAMPLE]);
+            writer_image(&w, 0, COMBINED, fg->color[p].view, fg->sampler);
+            writer_image(&w, 1, STORAGE, fg->color_half.view, VK_NULL_HANDLE);
+            writer_end(&w);
+        }
     }
     return VK_SUCCESS;
 }
@@ -949,6 +1003,7 @@ void afmf_framegen_destroy(struct afmf_device *dev, struct afmf_framegen *fg)
     if (fg->sampler != VK_NULL_HANDLE)
         dev->fns.destroy_sampler(dev->handle, fg->sampler, NULL);
     image_destroy(dev, &fg->output);
+    image_destroy(dev, &fg->color_half);
     for (uint32_t p = 0; p < 2; p++) {
         image_destroy(dev, &fg->color[p]);
         for (uint32_t k = 0; k < AFMF_LEVELS; k++) {
@@ -973,6 +1028,19 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
     fg->extent = extent;
     fg->slots = slots;
 
+    /* Performance mode: the block search, 85 % of the cost, runs on a half-size frame; blocks
+     * become 16 pixels on screen. Auto picks it from 1440p up, where the search dominates. */
+    const struct afmf_config *cfg = afmf_config_get();
+    bool half = cfg->performance == AFMF_PERFORMANCE_FAST ||
+                (cfg->performance == AFMF_PERFORMANCE_AUTO &&
+                 (uint64_t)extent.width * extent.height >= 2560u * 1440u);
+    if (extent.width / 2 < AFMF_MIN_EXTENT || extent.height / 2 < AFMF_MIN_EXTENT)
+        half = false; /* too small for the pyramid at half size: full resolution instead */
+    fg->flow_scale = half ? 2u : 1u;
+    fg->of_extent.width = (extent.width + fg->flow_scale - 1) / fg->flow_scale;
+    fg->of_extent.height = (extent.height + fg->flow_scale - 1) / fg->flow_scale;
+    fg->half = swapchain_format == VK_FORMAT_R16G16B16A16_SFLOAT ? HALF_RGBA16F : HALF_RGBA8;
+
     const char *blocker = NULL;
     if (dev->api_version < VK_API_VERSION_1_1)
         blocker = "application uses Vulkan 1.0; the flow shaders need 1.1 subgroups";
@@ -983,6 +1051,9 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
     else if (!format_supports(dev, fg->out_format, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) ||
              !format_supports(dev, fg->color_format, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
         blocker = "device lacks storage or filtered sampling for the swapchain format";
+    else if (half && !format_supports(dev, downsample_variants[fg->half].format,
+                                      VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
+        blocker = "device lacks storage for the half-resolution colour";
     else if (!format_supports(dev, VK_FORMAT_R32_UINT, VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT))
         blocker = "device lacks r32ui image atomics";
     else if (pipelines_get(dev) == NULL)
@@ -1006,9 +1077,10 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
         afmf_framegen_destroy(dev, fg);
         return NULL;
     }
-    AFMF_INFO("interpolation ready: %ux%u, flow %ux%u blocks, %u pyramid levels", extent.width,
-              extent.height, fg->flow_size[0].width, fg->flow_size[0].height,
-              afmf_config_get()->flow_levels);
+    AFMF_INFO("interpolation ready: %ux%u, flow at %ux%u (%ux%u blocks of %u px), %u pyramid levels",
+              extent.width, extent.height, fg->of_extent.width, fg->of_extent.height,
+              fg->flow_size[0].width, fg->flow_size[0].height, AFMF_FLOW_BLOCK * fg->flow_scale,
+              cfg->flow_levels);
     return fg;
 }
 
@@ -1057,6 +1129,8 @@ static void clear_zero(struct afmf_device *dev, VkCommandBuffer cmd, VkImage ima
  * reset (a fresh luma history reads as black, which the first search treats as no motion). */
 static void initialize(struct afmf_device *dev, struct afmf_framegen *fg, VkCommandBuffer cmd)
 {
+    if (fg->color_half.image != VK_NULL_HANDLE)
+        to_general(dev, cmd, fg->color_half.image);
     for (uint32_t p = 0; p < 2; p++) {
         to_general(dev, cmd, fg->color[p].image);
         for (uint32_t k = 0; k < AFMF_LEVELS; k++) {
@@ -1089,7 +1163,7 @@ static void write_constants(struct afmf_framegen *fg, uint32_t slot, uint32_t le
 {
     for (uint32_t k = 0; k < AFMF_LEVELS; k++) {
         struct cb_of of = {
-            .input_luma_resolution = {(int32_t)fg->extent.width, (int32_t)fg->extent.height},
+            .input_luma_resolution = {(int32_t)fg->of_extent.width, (int32_t)fg->of_extent.height},
             .pyramid_level = k,
             .pyramid_level_count = level_count,
             .frame_index = fg->frame_index,
@@ -1099,9 +1173,9 @@ static void write_constants(struct afmf_framegen *fg, uint32_t slot, uint32_t le
         memcpy(fg->cb_mapped + cb_offset(fg, slot, k), &of, sizeof of);
     }
 
-    /* ffxSpdSetup for the whole surface, 64x64 tiles, 6 mips generated by the pass. */
-    uint32_t tiles_x = (fg->extent.width - 1) / 64 + 1;
-    uint32_t tiles_y = (fg->extent.height - 1) / 64 + 1;
+    /* ffxSpdSetup for the whole flow surface, 64x64 tiles, 6 mips generated by the pass. */
+    uint32_t tiles_x = (fg->of_extent.width - 1) / 64 + 1;
+    uint32_t tiles_y = (fg->of_extent.height - 1) / 64 + 1;
     struct cb_spd spd = {
         .mips = 6,
         .num_work_groups = tiles_x * tiles_y,
@@ -1141,7 +1215,7 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
     const struct afmf_config *cfg = afmf_config_get();
     uint32_t levels = cfg->flow_levels < AFMF_LEVELS ? cfg->flow_levels : AFMF_LEVELS;
     uint32_t p = fg->frame_index & 1u;
-    uint32_t w = fg->extent.width, h = fg->extent.height;
+    uint32_t w = fg->of_extent.width, h = fg->of_extent.height; /* optical flow dimensions */
 
     if (!fg->initialized)
         initialize(dev, fg, cmd);
@@ -1152,10 +1226,18 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
     sync(dev, cmd);
     profiler_begin(dev, fg, cmd, slot);
 
-    /* 1. The new frame into the colour ring. */
+    /* 1. The new frame into the colour ring, and downscaled for the flow when in performance
+     *    mode. */
     copy_whole(dev, cmd, current, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fg->color[p].image,
                VK_IMAGE_LAYOUT_GENERAL, fg->extent);
     sync(dev, cmd);
+    if (fg->flow_scale > 1) {
+        struct downsample_push push = {.size = {(int32_t)w, (int32_t)h}};
+        dev->fns.cmd_push_constants(cmd, pl->layouts[PASS_DOWNSAMPLE], VK_SHADER_STAGE_COMPUTE_BIT,
+                                    0, (uint32_t)sizeof push, &push);
+        dispatch(dev, cmd, pl->downsample[fg->half], pl->layouts[PASS_DOWNSAMPLE],
+                 fg->sets[p][SET_DOWNSAMPLE], NULL, 0, (w + 7) / 8, (h + 7) / 8, 1);
+    }
     profiler_mark(dev, fg, cmd, slot, STAGE_INGEST);
 
     /* 2. Optical flow: luma, pyramid, scene change detector, then coarse-to-fine search. */
@@ -1199,16 +1281,18 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
 
     /* 3. The frame in between, into the target. */
     if (target != VK_NULL_HANDLE) {
+        uint32_t out_w = fg->extent.width, out_h = fg->extent.height;
         struct interpolate_push push = {
-            .size = {(int32_t)w, (int32_t)h},
+            .size = {(int32_t)out_w, (int32_t)out_h},
             .block = (int32_t)AFMF_FLOW_BLOCK,
             .fallback = cfg->fast_motion == AFMF_RESPONSE_BLENDED_FRAMES ? 1 : 0,
             .max_motion = AFMF_MAX_TRUSTED_MOTION,
+            .flow_scale = (float)fg->flow_scale,
         };
         dev->fns.cmd_push_constants(cmd, pl->layouts[PASS_INTERPOLATE], VK_SHADER_STAGE_COMPUTE_BIT,
                                     0, (uint32_t)sizeof push, &push);
         dispatch(dev, cmd, pl->interpolate[fg->variant], pl->layouts[PASS_INTERPOLATE],
-                 fg->sets[p][SET_INTERPOLATE], NULL, 0, (w + 7) / 8, (h + 7) / 8, 1);
+                 fg->sets[p][SET_INTERPOLATE], NULL, 0, (out_w + 7) / 8, (out_h + 7) / 8, 1);
         profiler_mark(dev, fg, cmd, slot, STAGE_INTERPOLATE);
         copy_whole(dev, cmd, fg->output.image, VK_IMAGE_LAYOUT_GENERAL, target,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, fg->extent);
@@ -1217,7 +1301,7 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
         if (afmf_framegen_dump_pending(fg)) {
             VkBufferImageCopy region = {
                 .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                .imageExtent = {w, h, 1},
+                .imageExtent = {out_w, out_h, 1},
             };
             dev->fns.cmd_copy_image_to_buffer(cmd, fg->output.image, VK_IMAGE_LAYOUT_GENERAL,
                                               fg->dump_buffer, 1, &region);

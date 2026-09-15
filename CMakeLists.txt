@@ -16,6 +16,12 @@ include(GNUInstallDirs)
 # The test host is an ordinary application and does link it.
 find_package(Vulkan REQUIRED)
 find_package(Threads REQUIRED)
+# VK_EXT_swapchain_maintenance1 and VK_KHR_present_id are the oldest structures the layer carries
+# for the application; VK_EXT_present_timing is optional (#ifdef in src/swapchain.c) so the
+# distribution packages build against the headers Ubuntu 24.04 and Debian trixie ship.
+if(Vulkan_VERSION VERSION_LESS 1.3.250)
+    message(FATAL_ERROR "Vulkan headers ${Vulkan_VERSION} are too old; 1.3.250 or newer is needed")
+endif()
 
 set(AFMF_WARNINGS
     -Wall -Wextra

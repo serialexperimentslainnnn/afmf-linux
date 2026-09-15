@@ -39,8 +39,13 @@ struct afmf_present_job {
     bool have_present_mode;
     VkPresentModeKHR present_mode;
     VkFence present_fence; /* VK_EXT_swapchain_maintenance1: signalled with the real frame */
+#ifdef VK_EXT_present_timing
+    /* Newer headers only (distribution packages build against older ones): without the
+     * extension in the header, a timing request makes that present inline, like any unknown
+     * structure. */
     bool have_timing;      /* VK_EXT_present_timing: the application's timing request, real frame */
     VkPresentTimingInfoEXT timing;
+#endif
 };
 
 /* One in-flight layer submission: its command buffer and the fence that says the slot can be
@@ -730,11 +735,13 @@ static VkResult present_one(struct afmf_device *dev, struct afmf_swapchain *sc, 
         .swapchainCount = 1,
         .pFences = &job->present_fence,
     };
+#ifdef VK_EXT_present_timing
     VkPresentTimingsInfoEXT timings = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_TIMINGS_INFO_EXT,
         .swapchainCount = 1,
         .pTimingInfos = &job->timing,
     };
+#endif
     VkPresentInfoKHR present = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
@@ -756,8 +763,10 @@ static VkResult present_one(struct afmf_device *dev, struct afmf_swapchain *sc, 
         *tail = &fence;
         tail = &fence.pNext;
     }
+#ifdef VK_EXT_present_timing
     if (real && job->have_timing)
         *tail = &timings;
+#endif
 
     struct timespec t0, t1;
     (void)clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -908,6 +917,7 @@ static bool job_from_chain(const VkPresentInfoKHR *info, struct afmf_present_job
                 job->present_fence = f->pFences[0];
             break;
         }
+#ifdef VK_EXT_present_timing
         case VK_STRUCTURE_TYPE_PRESENT_TIMINGS_INFO_EXT: {
             /* The application's timing request (target time, stages to query) belongs to its
              * frame: it goes on the real present, whose past-presentation timing it will read
@@ -920,6 +930,7 @@ static bool job_from_chain(const VkPresentInfoKHR *info, struct afmf_present_job
             }
             break;
         }
+#endif
         case VK_STRUCTURE_TYPE_PRESENT_REGIONS_KHR:
             break; /* a hint about what changed; the generated frame changes everything anyway */
         default: {

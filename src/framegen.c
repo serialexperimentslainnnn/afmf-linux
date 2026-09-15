@@ -312,6 +312,7 @@ struct afmf_framegen {
     VkExtent2D extent;
     VkExtent2D of_extent;   /* what the optical flow sees: extent, or half of it in performance mode */
     uint32_t flow_scale;    /* extent / of_extent: 1 or 2 */
+    uint32_t levels;        /* pyramid levels the search walks: 5 or 7 (AFMF_LEVELS) */
     struct image color_half; /* of_extent-sized downscale of the new frame; unused when scale is 1 */
     enum half_variant half;
     VkFormat color_format; /* UNORM sibling of the swapchain format: same bytes, no sRGB decode */
@@ -1040,6 +1041,13 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
     fg->of_extent.width = (extent.width + fg->flow_scale - 1) / fg->flow_scale;
     fg->of_extent.height = (extent.height + fg->flow_scale - 1) / fg->flow_scale;
     fg->half = swapchain_format == VK_FORMAT_R16G16B16A16_SFLOAT ? HALF_RGBA16F : HALF_RGBA8;
+    /* At reduced flow resolution five levels already cover +-128 flow pixels (+-256 on screen): the
+     * two coarsest levels are drains, not accuracy. `high` still forces all seven. */
+    fg->levels = cfg->flow_levels;
+    if (fg->flow_scale > 1 && cfg->search_mode != AFMF_SEARCH_HIGH && fg->levels > 5)
+        fg->levels = 5;
+    if (fg->levels > AFMF_LEVELS)
+        fg->levels = AFMF_LEVELS;
 
     const char *blocker = NULL;
     if (dev->api_version < VK_API_VERSION_1_1)
@@ -1080,7 +1088,7 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
     AFMF_INFO("interpolation ready: %ux%u, flow at %ux%u (%ux%u blocks of %u px), %u pyramid levels",
               extent.width, extent.height, fg->of_extent.width, fg->of_extent.height,
               fg->flow_size[0].width, fg->flow_size[0].height, AFMF_FLOW_BLOCK * fg->flow_scale,
-              cfg->flow_levels);
+              fg->levels);
     return fg;
 }
 
@@ -1097,6 +1105,20 @@ static void sync(struct afmf_device *dev, VkCommandBuffer cmd)
     };
     VkPipelineStageFlags stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
     dev->fns.cmd_pipeline_barrier(cmd, stages, stages, 0, 1, &barrier, 0, NULL, 0, NULL);
+}
+
+/* Between two compute passes only: no transfer scopes, so the driver need not flush the caches a
+ * copy engine would read. */
+static void sync_compute(struct afmf_device *dev, VkCommandBuffer cmd)
+{
+    VkMemoryBarrier barrier = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+    };
+    dev->fns.cmd_pipeline_barrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
+                                  NULL);
 }
 
 static void to_general(struct afmf_device *dev, VkCommandBuffer cmd, VkImage image)
@@ -1185,15 +1207,25 @@ static void write_constants(struct afmf_framegen *fg, uint32_t slot, uint32_t le
     memcpy(fg->cb_mapped + cb_offset(fg, slot, AFMF_LEVELS), &spd, sizeof spd);
 }
 
-static void dispatch(struct afmf_device *dev, VkCommandBuffer cmd, VkPipeline pipeline,
-                     VkPipelineLayout layout, VkDescriptorSet set, const uint32_t *offsets,
-                     uint32_t offset_count, uint32_t x, uint32_t y, uint32_t z)
+/* Records one compute pass. `barrier` false lets the next pass start without waiting: only for
+ * passes that neither read nor overwrite each other's outputs. */
+static void dispatch_pass(struct afmf_device *dev, VkCommandBuffer cmd, VkPipeline pipeline,
+                          VkPipelineLayout layout, VkDescriptorSet set, const uint32_t *offsets,
+                          uint32_t offset_count, uint32_t x, uint32_t y, uint32_t z, bool barrier)
 {
     dev->fns.cmd_bind_pipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     dev->fns.cmd_bind_descriptor_sets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set,
                                       offset_count, offsets);
     dev->fns.cmd_dispatch(cmd, x, y, z);
-    sync(dev, cmd);
+    if (barrier)
+        sync_compute(dev, cmd);
+}
+
+static void dispatch(struct afmf_device *dev, VkCommandBuffer cmd, VkPipeline pipeline,
+                     VkPipelineLayout layout, VkDescriptorSet set, const uint32_t *offsets,
+                     uint32_t offset_count, uint32_t x, uint32_t y, uint32_t z)
+{
+    dispatch_pass(dev, cmd, pipeline, layout, set, offsets, offset_count, x, y, z, true);
 }
 
 static void copy_whole(struct afmf_device *dev, VkCommandBuffer cmd, VkImage src,
@@ -1213,7 +1245,7 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
 {
     const struct afmf_framegen_pipelines *pl = dev->framegen_pipelines;
     const struct afmf_config *cfg = afmf_config_get();
-    uint32_t levels = cfg->flow_levels < AFMF_LEVELS ? cfg->flow_levels : AFMF_LEVELS;
+    uint32_t levels = fg->levels;
     uint32_t p = fg->frame_index & 1u;
     uint32_t w = fg->of_extent.width, h = fg->of_extent.height; /* optical flow dimensions */
 
@@ -1246,9 +1278,12 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
              fg->sets[p][SET_PREPARE], &of0, 1, ((w + 1) / 2 + 15) / 16, ((h + 1) / 2 + 15) / 16, 1);
     profiler_mark(dev, fg, cmd, slot, STAGE_PREPARE);
 
+    /* The pyramid (reads luma 0, writes levels 1-6) and the detector's histogram (reads luma 0)
+     * are independent: no barrier between them, one after both. */
     uint32_t pyramid_offsets[2] = {of0, cb_offset(fg, slot, AFMF_LEVELS)};
-    dispatch(dev, cmd, pl->pipelines[PASS_PYRAMID], pl->layouts[PASS_PYRAMID],
-             fg->sets[p][SET_PYRAMID], pyramid_offsets, 2, (w - 1) / 64 + 1, (h - 1) / 64 + 1, 1);
+    dispatch_pass(dev, cmd, pl->pipelines[PASS_PYRAMID], pl->layouts[PASS_PYRAMID],
+                  fg->sets[p][SET_PYRAMID], pyramid_offsets, 2, (w - 1) / 64 + 1, (h - 1) / 64 + 1,
+                  1, false);
     profiler_mark(dev, fg, cmd, slot, STAGE_PYRAMID);
 
     uint32_t strata_width = (w / 4) / AFMF_HISTOGRAMS_PER_DIM;

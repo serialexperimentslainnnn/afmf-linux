@@ -62,14 +62,16 @@ static void init(void)
     long acquire_timeout_us = 16000;
     long interpolate = 1;
     /* ADLX search mode: standard keeps the search to 5 pyramid levels (+-128 px), high uses all 7
-     * (+-512 px); auto picks high. */
-    long flow_levels = 7;
+     * (+-512 px); auto lets the flow resolution decide (framegen.c). */
+    long search_mode = AFMF_SEARCH_AUTO;
     long fast_motion = AFMF_RESPONSE_REPEAT_FRAMES;
     long performance = AFMF_PERFORMANCE_AUTO;
     long profile = 0;
     long async = 1;
 
-    static const struct choice search_modes[] = {{"auto", 7}, {"standard", 5}, {"high", 7}};
+    static const struct choice search_modes[] = {{"auto", AFMF_SEARCH_AUTO},
+                                                {"standard", AFMF_SEARCH_STANDARD},
+                                                {"high", AFMF_SEARCH_HIGH}};
     static const struct choice responses[] = {{"repeat", AFMF_RESPONSE_REPEAT_FRAMES},
                                              {"blend", AFMF_RESPONSE_BLENDED_FRAMES}};
     static const struct choice performance_modes[] = {{"auto", AFMF_PERFORMANCE_AUTO},
@@ -80,7 +82,7 @@ static void init(void)
     ok = read_bounded("AFMF_EXTRA_IMAGES", 1, 8, &extra_images) && ok;
     ok = read_bounded("AFMF_ACQUIRE_TIMEOUT_US", 0, 100000, &acquire_timeout_us) && ok;
     ok = read_bounded("AFMF_INTERPOLATE", 0, 1, &interpolate) && ok;
-    ok = read_choice("AFMF_SEARCH_MODE", search_modes, 3, &flow_levels) && ok;
+    ok = read_choice("AFMF_SEARCH_MODE", search_modes, 3, &search_mode) && ok;
     ok = read_choice("AFMF_FAST_MOTION_RESPONSE", responses, 2, &fast_motion) && ok;
     ok = read_bounded("AFMF_PROFILE", 0, 1, &profile) && ok;
     ok = read_bounded("AFMF_ASYNC", 0, 1, &async) && ok;
@@ -90,7 +92,8 @@ static void init(void)
     g_config.extra_images = (uint32_t)extra_images;
     g_config.acquire_timeout_ns = (uint64_t)acquire_timeout_us * 1000u;
     g_config.interpolate = interpolate != 0;
-    g_config.flow_levels = (uint32_t)flow_levels;
+    g_config.search_mode = (enum afmf_search_mode)search_mode;
+    g_config.flow_levels = search_mode == AFMF_SEARCH_STANDARD ? 5u : 7u;
     g_config.fast_motion = (enum afmf_fast_motion_response)fast_motion;
     g_config.performance = (enum afmf_performance_mode)performance;
     const char *dump_dir = getenv("AFMF_DUMP_DIR");

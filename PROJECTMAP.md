@@ -57,7 +57,7 @@ has no interpolation variant fall back to repeating the previous frame.
 | `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the app asked (1..8) |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `16000` | Longest wait for a free image before presenting without a companion |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
-| `AFMF_SEARCH_MODE` | `auto` | `standard` = 5 pyramid levels (+-128 px), `high`/`auto` = 7 (+-512 px) |
+| `AFMF_SEARCH_MODE` | `auto` | `standard` = 5 pyramid levels, `high` = 7; `auto` = 7 at full flow resolution, 5 at half (`fg->levels`) |
 | `AFMF_FAST_MOTION_RESPONSE` | `repeat` | `repeat` or `blend` for pixels the flow cannot trust (scene change, > 64 px) |
 | `AFMF_DUMP_DIR` | unset | Writes the first 4 generated frames as `afmf_generated_<n>.ppm` (8-bit formats) |
 | `AFMF_PROFILE` | `0` | `1` (or `AFMF_LOG=3`) logs GPU time per stage every 300 frames and at teardown |
@@ -74,6 +74,7 @@ shaders, the driver or the resolution change; review this table with every optim
 | 2026-09-15 | `631b0c0` + profiler | 1222 us | block search 85 % (1038 us); everything else < 40 us each | Baseline; all on the application's queue |
 | 2026-09-15 | async queue | 1222 us (unchanged) | same | Work and presents moved to the layer's compute queue (RADV family 1); headless host critical path 5.58 -> 4.82 ms median of 3 (host is upload-bound, not a game proxy) |
 | 2026-09-15 | performance mode | 493 us on the app queue (quality 1224) | search 331 us (67 %) | Flow at half resolution; golden test identical. On the compute queue the same work reads 1395 us (quality 4329) of wall time: the ACE shares the GPU with graphics and the idle host lowers clocks; the host's own frame is still shorter with async (4.24 vs 4.70 ms) |
+| 2026-09-15 | 5 levels at half + scoped barriers | 434 us (433-445, N=3) | search 298 us (69 %) | Two coarsest levels dropped in `auto` at half resolution (they searched +-256/+-512 screen px for 46 us), compute-only barriers between passes, none between pyramid and SCD histogram. Measured and rejected: wave32 for compute (`RADV_PERFTEST=cswave32`: search unchanged, total +17 us); native SAD (`v_sad_u8`/`v_msad_u8`) is unreachable from GLSL, ACO emits neither for any SAD shape |
 
 ## Commands
 | What | Command | Verified |
@@ -132,8 +133,16 @@ shaders, the driver or the resolution change; review this table with every optim
   294 of 296. Hence the defaults. Headless surfaces release immediately, so ctest cannot catch this.
 - **Pacing is the display's, not ours**: in FIFO the companion and the real frame take consecutive
   refresh slots, so the cadence is even only when the refresh rate is a multiple of the game's frame
-  rate (cap the game at half the refresh). Half-frame-time pacing needs a presentation thread; not
-  built yet.
+  rate (cap the game at half the refresh). In MAILBOX/IMMEDIATE the companion is presented
+  microseconds before the real frame, so whenever the presented rate exceeds the refresh rate the
+  compositor mostly drops the companion: the counter doubles, the eye sees the real frames. Half-
+  frame-time pacing (delay the real frame by half the measured frame time from a presentation
+  thread, the latency AMD's AFMF also pays) is the fix; not built yet.
+- **Not done on purpose, with the numbers**: writing the interpolator straight into the swapchain
+  image (saves the 19 us output copy) needs `STORAGE` usage on the swapchain images, which can cost
+  the *game's* rendering (compression) more than 19 us on a queue that is already off its critical
+  path; only a game measurement can decide it. Reading the swapchain image directly for the flow
+  saves nothing: the history copy is the same bytes.
 - **Two GPUs** in the dev box (RX 9070 XT = `renderD129`, RX 7800 XT = `renderD128`); the headless
   test picks the first device that can present, which today is the 9070 XT.
 - **64-bit only** (`_Static_assert` in `src/layer.c`); 32-bit DXVK titles need a separate build.

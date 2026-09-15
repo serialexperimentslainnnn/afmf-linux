@@ -11,8 +11,9 @@ All notable changes to afmf-linux are documented here. The format follows
   frame; numbers on the performance page.
 
 ### Changed
-- Documentation: do not stack with another frame generation layer (lsfg-vk hung presentation on
-  the RDNA3 test system even with afmf-linux disabled).
+- Documentation: do not stack with another frame generation layer or injector (lsfg-vk hung
+  presentation on the RDNA3 test system even with afmf-linux disabled; OptiScaler does not work
+  together with the layer). The game's own frame generation stays on.
 
 ## [0.3.0] - 2026-09-15
 

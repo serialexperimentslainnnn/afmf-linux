@@ -35,7 +35,10 @@ bug template asks for what is needed.
 **Do not stack it with another frame generation layer.** Two layers generating frames on the same
 swapchain fight over the same presents. In particular, with the **lsfg-vk** implicit layer
 installed, Vulkan presentation on our RDNA3 test system hung (no window, 8 fps) even with
-afmf-linux disabled; uninstall it or set `DISABLE_LSFGVK=1` while using afmf-linux.
+afmf-linux disabled; uninstall it or set `DISABLE_LSFGVK=1` while using afmf-linux. **OptiScaler**
+(`PROTON_USE_OPTISCALER`, or its DLLs in the game folder) is not compatible either: it replaces the
+game's upscaler and frame generation inside the game process and does not work together with
+afmf-linux.
 
 **The game's own frame generation (FSR 3/4 FG) stays on.** In Cyberpunk 2077 under vkd3d-proton
 the layer only produced companions with the game's frame generation enabled; with it off, it did
@@ -174,7 +177,8 @@ atomics; the tuning was done on RDNA4 with RADV. RDNA2/RDNA3, Intel and NVIDIA a
 
 **Does it work with the game's own frame generation (FSR 3/4 FG, DLSS FG) or with lsfg-vk?** With
 the game's own, yes, and in Cyberpunk 2077 it needs it on: the layer doubles whatever the game
-presents. Another frame generation *layer* (lsfg-vk) is not supported: see Status.
+presents. Another frame generation *layer* (lsfg-vk) or injector (OptiScaler) is not supported:
+see Status.
 
 **Gamescope? HDR?** HDR10 and scRGB swapchains are interpolated (10-bit and 16-bit float
 variants). Whether the game gets HDR at all is between Wine, the compositor and Mesa, not the

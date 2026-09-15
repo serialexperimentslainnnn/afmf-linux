@@ -64,12 +64,14 @@ out of the swapchain weigh much more than on RDNA4 (148 + 99 &micro;s against 47
 `AFMF_SEARCH_MODE=auto` (5 levels, about 90 &micro;s less) on this generation, and expect the 2&times;
 to fall short sooner when the game saturates the GPU.
 
-## Not compatible with other frame generation layers
+## Not compatible with other frame generation layers or injectors
 
 With the **lsfg-vk** implicit layer installed, Vulkan presentation on the RDNA3 test system hung
-(no window, 8 fps in vkcube) even with afmf-linux disabled; removing it fixed everything. Two
-layers generating frames on the same swapchain cannot both be right about which present is
-which: run one or the other.
+(no window, 8 fps in vkcube) even with afmf-linux disabled; removing it fixed everything.
+**OptiScaler** (`PROTON_USE_OPTISCALER`, or its DLLs dropped into the game folder), which replaces
+the game's upscaler and frame generation inside the process, does not work together with
+afmf-linux either. Two things generating frames on the same swapchain cannot both be right about
+which present is which: run one or the other.
 
 The rule that decides what you will see: the ceiling is **2&times; the base**, minus GPU
 contention when the game already saturates the GPU. A fixed cost of ~0.5 ms per frame weighs more

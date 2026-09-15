@@ -12,8 +12,8 @@ faq:
     a: No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image atomics. Tuned on RDNA4 with RADV; other GPUs are untested.
   - q: Does it work with the game's own frame generation (FSR 3/4 FG)?
     a: Yes, and keep it on. The layer doubles whatever the game presents; in Cyberpunk 2077 under vkd3d-proton it only produced companions with the game's frame generation enabled. Leave the in-game setting as you would on Windows with AFMF.
-  - q: Can I use it together with lsfg-vk?
-    a: No. Two frame generation layers fight over the same presents, and with the lsfg-vk implicit layer installed Vulkan presentation on our RDNA3 test system hung even with afmf-linux disabled. Uninstall lsfg-vk or set DISABLE_LSFGVK=1.
+  - q: Can I use it together with lsfg-vk or OptiScaler?
+    a: No. Two frame generation layers fight over the same presents. With the lsfg-vk implicit layer installed, Vulkan presentation on our RDNA3 test system hung even with afmf-linux disabled (uninstall it or set DISABLE_LSFGVK=1), and OptiScaler, which replaces the game's upscaler and frame generation inside the game process, does not work together with afmf-linux either.
   - q: Does it work on RDNA3?
     a: Yes. Verified on an RX 7800 XT with the same tests and in Cyberpunk 2077, at about three times the GPU cost per frame of an RX 9070 XT (1.2 ms at 3440x1440), so the gain is smaller when the game already saturates the GPU.
   - q: Does it work with HDR?

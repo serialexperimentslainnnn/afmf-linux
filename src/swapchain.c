@@ -38,6 +38,7 @@ struct afmf_present_job {
     uint64_t present_id;
     bool have_present_mode;
     VkPresentModeKHR present_mode;
+    VkFence present_fence; /* VK_EXT_swapchain_maintenance1: signalled with the real frame */
 };
 
 /* One in-flight layer submission: its command buffer and the fence that says the slot can be
@@ -722,6 +723,11 @@ static VkResult present_one(struct afmf_device *dev, struct afmf_swapchain *sc, 
         .swapchainCount = 1,
         .pPresentModes = &job->present_mode,
     };
+    VkSwapchainPresentFenceInfoEXT fence = {
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT,
+        .swapchainCount = 1,
+        .pFences = &job->present_fence,
+    };
     VkPresentInfoKHR present = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
@@ -735,8 +741,12 @@ static VkResult present_one(struct afmf_device *dev, struct afmf_swapchain *sc, 
         *tail = &mode;
         tail = &mode.pNext;
     }
-    if (real && job->have_present_id)
+    if (real && job->have_present_id) {
         *tail = &id;
+        tail = &id.pNext;
+    }
+    if (real && job->present_fence != VK_NULL_HANDLE)
+        *tail = &fence;
 
     struct timespec t0, t1;
     (void)clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -879,10 +889,26 @@ static bool job_from_chain(const VkPresentInfoKHR *info, struct afmf_present_job
             job->present_mode = m->pPresentModes[0];
             break;
         }
+        case VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT: {
+            /* The application waits on it to reuse the present's resources: it goes with the
+             * real frame, so the wait covers the layer's use of the image too. */
+            const VkSwapchainPresentFenceInfoEXT *f = (const VkSwapchainPresentFenceInfoEXT *)s;
+            if (f->pFences != NULL)
+                job->present_fence = f->pFences[0];
+            break;
+        }
         case VK_STRUCTURE_TYPE_PRESENT_REGIONS_KHR:
             break; /* a hint about what changed; the generated frame changes everything anyway */
-        default:
+        default: {
+            static bool reported;
+            if (!reported) {
+                reported = true;
+                AFMF_WARN("present chain carries sType %d, which the presentation thread cannot "
+                          "carry: presenting inline, without pacing",
+                          (int)s->sType);
+            }
             return false;
+        }
         }
     }
     return true;

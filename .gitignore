@@ -1,0 +1,10 @@
+# Build trees
+/build/
+/build-*/
+/cmake-build-*/
+
+# IDE
+/.idea/
+
+# Session tooling (never committed)
+/.claudetools/

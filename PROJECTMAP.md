@@ -51,7 +51,7 @@ has no interpolation variant fall back to repeating the previous frame.
 | `AFMF_ENABLE=1` | unset | Loads the layer implicitly (manifest `enable_environment`) |
 | `DISABLE_AFMF=1` | unset | Keeps it out even if enabled |
 | `AFMF_LOG` | `1` | 0 error, 1 warn, 2 info, 3 debug (stderr) |
-| `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the app asked (1..8) |
+| `AFMF_EXTRA_IMAGES` | `3` | Swapchain images added beyond what the app asked (1..8) |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `16000` | Longest wait for a free image before presenting without a companion |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_SEARCH_MODE` | `auto` | `standard` = 5 pyramid levels (+-128 px), `high`/`auto` = 7 (+-512 px) |

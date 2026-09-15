@@ -834,6 +834,16 @@ static VKAPI_ATTR void VKAPI_CALL afmf_DestroySwapchainKHR(VkDevice device, VkSw
     afmf_swapchain_destroy(dev, swapchain, alloc);
 }
 
+static VKAPI_ATTR VkResult VKAPI_CALL afmf_GetSwapchainImagesKHR(VkDevice device,
+                                                                 VkSwapchainKHR swapchain,
+                                                                 uint32_t *count, VkImage *images)
+{
+    struct afmf_device *dev = device_find(dispatch_key(device));
+    if (dev == NULL || dev->fns.get_swapchain_images == NULL)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    return afmf_swapchain_get_images(dev, swapchain, count, images);
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL afmf_AcquireNextImageKHR(VkDevice device,
                                                                VkSwapchainKHR swapchain,
                                                                uint64_t timeout,
@@ -941,7 +951,7 @@ static const struct hook device_hooks[] = {
 /* Only handed out when the next layer/driver has them, i.e. when VK_KHR_swapchain is enabled. */
 static const struct hook swapchain_hooks[] = {
     HOOK(CreateSwapchainKHR),   HOOK(DestroySwapchainKHR),   HOOK(QueuePresentKHR),
-    HOOK(AcquireNextImageKHR),  HOOK(AcquireNextImage2KHR),
+    HOOK(AcquireNextImageKHR),  HOOK(AcquireNextImage2KHR),  HOOK(GetSwapchainImagesKHR),
 };
 
 #define ARRAY_LEN(array) (sizeof(array) / sizeof((array)[0]))

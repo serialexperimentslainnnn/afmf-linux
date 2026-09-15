@@ -22,7 +22,7 @@ has no interpolation variant fall back to repeating the previous frame.
 | What is recorded per frame around framegen | `src/swapchain.c` `record_frame` | Image i arrives PRESENT_SRC and leaves PRESENT_SRC |
 | The present flow: take the spare, record, submit, hand off | `src/swapchain.c` `present_generated`, `spare_take` | Returns after the submit; the results of earlier presents come back deferred |
 | Presentation thread: two presents, pacing hold, spare refill | `src/swapchain.c` `presenter_main`, `present_one`, `job_from_chain` | One per swapchain, only when `sc->async`; the real frame waits `hold_ns` = half the EMA frame time (`AFMF_PACING`) |
-| The application's acquire, serialised with the thread | `src/swapchain.c` `afmf_swapchain_acquire` | 1 ms slices under `wsi_lock` |
+| The application's acquire and `vkGetSwapchainImagesKHR`, serialised with the thread | `src/swapchain.c` `afmf_swapchain_acquire`, `afmf_swapchain_get_images` | 1 ms slices under `wsi_lock`; the images query takes it whole (the thread's present is a write on the swapchain, the query a read) |
 | vkDeviceWaitIdle with threads in flight | `src/layer.c` `afmf_DeviceWaitIdle`, `afmf_swapchain_drain_all` | Drains every presenter, then idles under `async_lock` |
 | Host time the game's thread spends in the layer | `src/swapchain.c` `update_cadence` | Every 300 presents with `AFMF_PROFILE=1`: real fps, hook/fence/acquire/each present/refill us |
 | Which window system a surface is (Wayland, X11, headless) | `src/layer.c` `surface_hooks` | Logged at INFO; generic signature, no platform headers |
@@ -60,8 +60,12 @@ has no interpolation variant fall back to repeating the previous frame.
   `opticalflow/`, `spd/`, `passes/*.glsl`).
 - `cmake/` — build helpers.
 - `tests/` — `headless.c` (ctest) and `smoke.sh` (opens windows; run it from the IDE configuration).
-- `.idea/runConfigurations/` — local, not versioned: `Build: all`, `Test: headless`, `Test: smoke`, plus
-  the IDE-generated `All CTest`.
+- `.idea/runConfigurations/` — local, not versioned: `CTest: all`, `CTest: headless (golden, quality +
+  performance)`, `CTest: gamescope (extra images, passive)`, `CTest: presentation (present ids, shared
+  queue, min fps)` (type `CTestRunConfiguration`, `/usr/bin/ctest` in `cmake-build-debug`) and
+  `headless: profile run (3440x1440, 1200 frames)`; all carry `MESA_VK_DEVICE_SELECT`. Lain launches
+  them; the plugin's `run_tests` does not start CTest configurations. Results in
+  `cmake-build-debug/Testing/Temporary/LastTest.log`.
 
 ## Entry points
 - Loader → `vkNegotiateLoaderLayerInterfaceVersion` (`src/layer.c`), the only exported symbol.
@@ -193,8 +197,10 @@ shaders, the driver or the resolution change; review this table with every optim
   the *game's* rendering (compression) more than 19 us on a queue that is already off its critical
   path; only a game measurement can decide it. Reading the swapchain image directly for the flow
   saves nothing: the history copy is the same bytes.
-- **Two GPUs** in the dev box (RX 9070 XT = `renderD129`, RX 7800 XT = `renderD128`); the headless
-  test picks the first device that can present, which today is the 9070 XT.
+- **Two GPUs in the dev box; every launch is pinned to the RX 9070 XT** with
+  `MESA_VK_DEVICE_SELECT=1002:7550!` (the `!` hides every other device), set in the environment of
+  each IDE run configuration. A launch without it enumerates the second card and pays its wake-up
+  time before the first present.
 - **64-bit only** (`_Static_assert` in `src/layer.c`); 32-bit DXVK titles need a separate build.
 - `vkcube --validate` is not validation-clean by itself (`VUID-vkAcquireNextImageKHR-surface-07783`):
   do not add validation checks to `tests/smoke.sh`, the headless test owns that gate.

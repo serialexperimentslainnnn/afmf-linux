@@ -1091,6 +1091,22 @@ VkResult afmf_swapchain_acquire(struct afmf_device *dev, const VkAcquireNextImag
     }
 }
 
+VkResult afmf_swapchain_get_images(struct afmf_device *dev, VkSwapchainKHR swapchain,
+                                   uint32_t *count, VkImage *images)
+{
+    pthread_mutex_lock(&dev->lock);
+    struct afmf_swapchain *sc = find_locked(dev, swapchain);
+    pthread_mutex_unlock(&dev->lock);
+
+    bool ours = sc != NULL && sc->gen_enabled;
+    if (ours)
+        pthread_mutex_lock(&sc->wsi_lock);
+    VkResult res = dev->fns.get_swapchain_images(dev->handle, swapchain, count, images);
+    if (ours)
+        pthread_mutex_unlock(&sc->wsi_lock);
+    return res;
+}
+
 /* The application's present, with the generated frame in front of it when one could be made. */
 static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain *sc, VkQueue queue,
                                   uint32_t family, const VkPresentInfoKHR *info)

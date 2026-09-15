@@ -27,6 +27,11 @@ VkResult afmf_swapchain_present(struct afmf_device *dev, VkQueue queue, const Vk
 VkResult afmf_swapchain_acquire(struct afmf_device *dev, const VkAcquireNextImageInfoKHR *info,
                                 bool v2, uint32_t *index);
 
+/* vkGetSwapchainImagesKHR, serialised with the presentation thread: the application reads the
+ * swapchain while the thread may be presenting from it. */
+VkResult afmf_swapchain_get_images(struct afmf_device *dev, VkSwapchainKHR swapchain,
+                                   uint32_t *count, VkImage *images);
+
 /* Waits until every presentation thread of the device has nothing queued: vkDeviceWaitIdle
  * needs every queue idle and externally synchronised, ours included. */
 void afmf_swapchain_drain_all(struct afmf_device *dev);

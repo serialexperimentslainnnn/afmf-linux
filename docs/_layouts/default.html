@@ -8,7 +8,7 @@
   {%- seo -%}
   {%- feed_meta -%}
   <link rel="icon" href="{{ '/assets/favicon.svg' | relative_url }}" type="image/svg+xml">
-  <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+  <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}?v={{ site.github.build_revision }}">
   {%- include structured-data.html -%}
 </head>
 <body>

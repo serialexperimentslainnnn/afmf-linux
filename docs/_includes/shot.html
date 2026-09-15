@@ -1,6 +1,7 @@
 {%- comment -%}
-One capture: the 1920-wide JPG inline, linked to the 3440x1440 one.
+One capture: the 1920-wide JPG inline, linked to the 3440x1440 one. The build revision in the
+query string keeps the CDN (max-age 4 h, 404s included) from serving a stale answer after a deploy.
 Parameters: file (name without extension or suffix), alt.
 {%- endcomment -%}
 {%- assign base = '/assets/screenshots/' | append: include.file -%}
-<a class="shot" href="{{ base | append: '-full.jpg' | relative_url }}" target="_blank" rel="noopener" title="Open at 3440×1440"><img src="{{ base | append: '.jpg' | relative_url }}" alt="{{ include.alt }}" width="1920" height="804" loading="lazy"></a>
+<a class="shot" href="{{ base | append: '-full.jpg' | relative_url }}?v={{ site.github.build_revision }}" target="_blank" rel="noopener" title="Open at 3440×1440"><img src="{{ base | append: '.jpg' | relative_url }}" alt="{{ include.alt }}" width="1920" height="804" loading="lazy"></a>

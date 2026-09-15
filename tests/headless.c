@@ -1,4 +1,4 @@
-/* Headless integration test for VK_LAYER_AFMF_frame_generation.
+/* Headless integration test for VK_LAYER_AFMF.
  *
  * Enables the layer by name (so a missing or broken layer fails vkCreateInstance instead of
  * silently running without it), puts VK_LAYER_KHRONOS_validation below it when available so the
@@ -13,7 +13,7 @@
 #include <string.h>
 #include <vulkan/vulkan.h>
 
-#define LAYER_NAME "VK_LAYER_AFMF_frame_generation"
+#define LAYER_NAME "VK_LAYER_AFMF"
 #define VALIDATION_LAYER_NAME "VK_LAYER_KHRONOS_validation"
 #define FRAMES 120u
 #define EXIT_SKIP 77

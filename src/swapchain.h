@@ -2,8 +2,16 @@
 
 #include "layer.h"
 
-/* Phase 1: pass-through. Each hook forwards to the driver and keeps per-swapchain bookkeeping
- * (format, extent, present cadence) that the frame-generation phases build on. */
+/* Frame generation at present time.
+ *
+ * The swapchain is created with one image more than the application asked for and with transfer
+ * usage. On every present of image i (frame N+1) the layer acquires a free image j without
+ * blocking, records on the presenting queue a copy of the previous frame (kept in a history image)
+ * into j and of image i into the history, then presents j followed by i. Phase 3 replaces the
+ * history->j copy with optical flow + interpolation of (history, i); nothing else changes.
+ *
+ * When no image is free, or there is no history yet, only the real frame is presented and the
+ * event is counted. Swapchains whose surface cannot support this fall back to pass-through. */
 
 VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateInfoKHR *info,
                                const VkAllocationCallbacks *alloc, VkSwapchainKHR *out);

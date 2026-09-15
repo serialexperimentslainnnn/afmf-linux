@@ -9,11 +9,14 @@
 static struct afmf_config g_config;
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 
-/* Parses a decimal integer in [min, max]; returns false on any other input (including garbage after
- * the number, overflow, or an empty string). */
-static bool parse_bounded(const char *text, long min, long max, long *out)
+/* Reads an integer variable in [min, max] into *out; leaves it untouched when unset. Returns false
+ * only when the variable is set to something unparsable or out of range. */
+static bool read_bounded(const char *name, long min, long max, long *out)
 {
-    if (text == NULL || *text == '\0')
+    const char *text = getenv(name);
+    if (text == NULL)
+        return true;
+    if (*text == '\0')
         return false;
 
     char *end = NULL;
@@ -29,17 +32,22 @@ static bool parse_bounded(const char *text, long min, long max, long *out)
 /* Runs under pthread_once: it must not log, because logging reads the config back. */
 static void init(void)
 {
-    g_config.log_level = AFMF_LOG_WARN;
+    long log_level = AFMF_LOG_WARN;
+    /* Measured with vkcube on a 165 Hz Wayland desktop: a free image only comes back once the
+     * compositor releases one, i.e. about one refresh period later, so the wait has to cover a
+     * period of the slowest common display (60 Hz, 16.7 ms). Two extra images made 294 of 296
+     * presents generate; one extra was not enough. */
+    long extra_images = 2;
+    long acquire_timeout_us = 16000;
 
-    const char *text = getenv("AFMF_LOG");
-    if (text == NULL)
-        return;
+    bool ok = read_bounded("AFMF_LOG", AFMF_LOG_ERROR, AFMF_LOG_DEBUG, &log_level);
+    ok = read_bounded("AFMF_EXTRA_IMAGES", 1, 8, &extra_images) && ok;
+    ok = read_bounded("AFMF_ACQUIRE_TIMEOUT_US", 0, 100000, &acquire_timeout_us) && ok;
 
-    long level;
-    if (parse_bounded(text, AFMF_LOG_ERROR, AFMF_LOG_DEBUG, &level))
-        g_config.log_level = (int)level;
-    else
-        g_config.log_level_invalid = true;
+    g_config.log_level = (int)log_level;
+    g_config.extra_images = (uint32_t)extra_images;
+    g_config.acquire_timeout_ns = (uint64_t)acquire_timeout_us * 1000u;
+    g_config.invalid = !ok;
 }
 
 const struct afmf_config *afmf_config_get(void)

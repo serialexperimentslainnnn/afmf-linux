@@ -1,12 +1,12 @@
 {
   "file_format_version": "1.0.0",
   "layer": {
-    "name": "VK_LAYER_AFMF_frame_generation",
+    "name": "VK_LAYER_AFMF",
     "type": "GLOBAL",
     "library_path": "@AFMF_LAYER_LIBRARY_PATH@",
     "api_version": "1.4.341",
-    "implementation_version": "1",
-    "description": "AFMF-style driver-level frame generation for Linux",
+    "implementation_version": "2",
+    "description": "afmf-linux: AFMF-style driver-level frame generation",
     "functions": {
       "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
     },

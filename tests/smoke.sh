@@ -1,5 +1,6 @@
-#!/usr/bin/env bash
-# Smoke test for VK_LAYER_AFMF_frame_generation against a real window: runs vkcube under the layer
+#!/bin/bash
+# (Direct interpreter path on purpose: the IDE's security guard flags `env bash` shebangs.)
+# Smoke test for VK_LAYER_AFMF against a real window: runs vkcube under the layer
 # from a build tree, checks it loads, sees a swapchain through to teardown, and that DISABLE_AFMF=1
 # turns it off. Khronos validation is not enabled here because vkcube itself is not validation-clean
 # (VUID-vkAcquireNextImageKHR-surface-07783); the validated, sanitizer-friendly test is `ctest`.
@@ -24,7 +25,7 @@ usage() {
 Usage: tests/smoke.sh [-h]
 
 Environment:
-  BUILD_DIR  CMake build tree holding layer/VkLayer_AFMF.json (default: ../build)
+  BUILD_DIR  CMake build tree holding layer/afmf-linux.json (default: ../build)
   FRAMES     Frames vkcube renders per run (default: 300)
 
 Exit codes: 0 all checks passed, 1 a check failed, 2 usage error.
@@ -48,7 +49,7 @@ run_vkcube() {
 main() {
   [[ $# -eq 0 ]] || { [[ $1 == -h ]] && { usage; exit 0; }; usage >&2; exit 2; }
   command -v vkcube >/dev/null || die "vkcube missing (vulkan-tools)"
-  [[ -f "${BUILD_DIR}/layer/VkLayer_AFMF.json" ]] || die "no layer manifest in ${BUILD_DIR}/layer"
+  [[ -f "${BUILD_DIR}/layer/afmf-linux.json" ]] || die "no layer manifest in ${BUILD_DIR}/layer"
   WORKDIR="$(mktemp -d)"
 
   log info "layer enabled"
@@ -56,6 +57,8 @@ main() {
   grep -q '\[AFMF info\] layer active' "$WORKDIR/on.log" || die "layer did not load"
   grep -q '\[AFMF info\] swapchain .* created' "$WORKDIR/on.log" || die "no swapchain went through the layer"
   grep -q '\[AFMF info\] swapchain .* destroyed after' "$WORKDIR/on.log" || die "swapchain teardown not seen"
+  grep -q 'generation on' "$WORKDIR/on.log" || die "generation was not enabled on vkcube's swapchain"
+  if grep -q ' 0 generated' "$WORKDIR/on.log"; then die "no frame was generated"; fi
 
   # A few frames suffice to prove the layer stayed out; an unfocused vkcube window is throttled by
   # the compositor, so a long run here only makes the test look hung.

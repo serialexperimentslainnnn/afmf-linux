@@ -5,8 +5,8 @@
     "type": "GLOBAL",
     "library_path": "@AFMF_LAYER_LIBRARY_PATH@",
     "api_version": "1.4.341",
-    "implementation_version": "2",
-    "description": "afmf-linux: AFMF-style driver-level frame generation",
+    "implementation_version": "3",
+    "description": "afmf-linux @PROJECT_VERSION@: AMD Fluid Motion Frames style frame generation for Linux",
     "functions": {
       "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
     },

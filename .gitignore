@@ -1,10 +1,34 @@
-# Build trees
-/build/
-/build-*/
-/cmake-build-*/
+# Allowlist: everything at the top level is ignored unless named below. A new top-level file or
+# directory has to be added here on purpose; build trees, IDE state, logs and session tooling can
+# never slip into a commit.
+/*
 
-# IDE
-/.idea/
+# Project files
+!/.gitignore
+!/.github/
+!/CMakeLists.txt
+!/LICENSE
+!/README.md
+!/CHANGELOG.md
+!/CONTRIBUTING.md
+!/SECURITY.md
+!/PROJECTMAP.md
 
-# Session tooling (never committed)
-/.claudetools/
+# Sources
+!/cmake/
+!/layer/
+!/shaders/
+!/src/
+!/tests/
+!/packaging/
+!/docs/
+
+# Inside the allowed directories
+/docs/_site/
+/docs/.jekyll-cache/
+/docs/Gemfile.lock
+/packaging/out/
+**/*.log
+**/*.spv
+**/*.o
+**/*.so

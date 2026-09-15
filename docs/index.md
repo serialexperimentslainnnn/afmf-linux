@@ -72,20 +72,23 @@ vkd3d-proton. Other GPUs and drivers: untested, reports welcome.
   <figcaption style="color:var(--muted);font-size:.9em">Cyberpunk 2077, RT Ultra, FSR 4 Quality: the game's own counter (top centre) says 116 real frames per second; MangoHud (top left) counts what reaches the screen, 243.</figcaption>
 </figure>
 
-| Game (RX 9070 XT, 3440&times;1440) | On screen with afmf-linux |
+| Game (RX 9070 XT, 3440&times;1440, 21:9) | On screen with afmf-linux |
 |---|---|
 | Monster Hunter Wilds, max settings + RT, Native AA (vkd3d-proton) | **265 fps** (120 without the layer) |
 | Cyberpunk 2077, RT Ultra, FSR 4 Quality (vkd3d-proton) | **243 fps** (116 real, per the game's counter) |
 | DOOM: The Dark Ages, Ultra Nightmare, FSR Quality (native Vulkan) | **268 fps** |
 | DOOM: The Dark Ages, Ultra Nightmare, Native AA + VRS (native Vulkan) | **255 fps** |
+| Overwatch 2, Epic, FidelityFX Quality, Reduced Buffering (DXVK) | **449 fps** (223 real, per the game's counter) |
 | Borderlands 4, Badass, FSR Quality (vkd3d-proton) | **125 fps** |
 | Cyberpunk 2077 on an RX 7800 XT (RDNA3), same settings | ~120-220 fps (60-110 real) |
+
+The exact launch options of each: [launch options per game]({{ '/launch-options/' | relative_url }}).
 
 <div class="numbers" style="grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))">
   <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/monster-hunter-wilds-max-rt-native-aa.jpg' | relative_url }}" alt="Monster Hunter Wilds at max settings with ray tracing and Native AA on Linux, 265 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
   <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/doom-the-dark-ages-ultra-nightmare-fsr-quality.jpg' | relative_url }}" alt="DOOM: The Dark Ages at Ultra Nightmare with FSR Quality on Linux, 268 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
   <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/borderlands-4-badass-fsr-quality.jpg' | relative_url }}" alt="Borderlands 4 at Badass settings with FSR Quality on Linux, 125 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
-  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/doom-the-dark-ages-ultra-nightmare-native-aa-vrs.jpg' | relative_url }}" alt="DOOM: The Dark Ages at Ultra Nightmare with Native AA and VRS on Linux, 255 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
+  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/overwatch-2-epic-fidelityfx-quality.jpg' | relative_url }}" alt="Overwatch 2 at Epic with FidelityFX Quality on Linux: 449 fps on screen with afmf-linux, 223 real per the game's counter" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
 </div>
 
 The ceiling is 2&times; the base the game reaches on Linux without the layer; the layer costs

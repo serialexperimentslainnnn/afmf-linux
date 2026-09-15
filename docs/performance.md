@@ -61,6 +61,7 @@ images, which can cost the game more than the 33 &micro;s copy it saves).
 | Cyberpunk 2077, RT Ultra, FSR 4 Quality, game FG on (needed), vkd3d-proton | ~100-125 fps | 180-250 | `RADV_PERFTEST=rtcps` raised the base; the gap to Windows is RADV's ray tracing, not the layer |
 | DOOM: The Dark Ages, Ultra Nightmare, FSR Quality, **native Vulkan** (id Tech 8) | | 268 | The first native Vulkan title through the layer; 12,900 presents in the menu all got a companion, hook 44 &micro;s. Note: `RADV_PERFTEST=rtcps` crashes this game inside RADV's ray tracing pipeline compiler; leave it out here |
 | DOOM: The Dark Ages, Ultra Nightmare, Native AA + VRS | | 255 | |
+| Overwatch 2, Epic, FidelityFX Quality, Reduced Buffering, DXVK | 223 fps (game's counter) | 449 | The highest base so far; the layer keeps up at 223 presents per second from the game |
 | Borderlands 4, Badass, FSR Quality, vkd3d-proton | ~60 fps | 125 | Unreal Engine 5 is heavy under vkd3d-proton; the layer doubles what it gets |
 | Cyberpunk 2077, same settings, **RX 7800 XT (RDNA3)**, FSR 4 in FP16 | ~60-110 fps | ~120-220 | 15,330 of 15,332 generated; hook 60-90 &micro;s; hold 4.6-7.6 ms. GPU cost 1,245 &micro;s per frame (search 700, ingest copy 148, interpolate 120, output copy 99): about 11 % of the GPU at 90 fps, against 5 % on the 9070 XT |
 

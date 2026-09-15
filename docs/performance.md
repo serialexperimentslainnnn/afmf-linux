@@ -12,25 +12,35 @@ stated. Re-measure on your hardware; the method is the same.
 
 ## What a frame costs
 
-GPU, per generated frame, optical flow at half resolution (the default from 2560&times;1440 up):
+GPU, per generated frame, with the defaults (optical flow at display resolution, all seven
+pyramid levels), on the worst case the headless test has: a textured picture panning across the
+whole frame at 3440&times;1440, every block moving (the host paints it, so the GPU sits at low
+clocks; a game runs it faster):
 
 | Stage | Time |
 |---|---|
-| Ingest copy | 47 &micro;s |
-| Luma, pyramid, scene-change detector | 42 &micro;s |
-| Block search (FidelityFX Optical Flow, 5 levels) | 250 &micro;s |
-| Filter and scale | 32 &micro;s |
-| Interpolation | 50 &micro;s |
-| Output copy | 33 &micro;s |
-| **Total** | **~450 &micro;s** |
+| Ingest (one read of the game's frame into the colour ring and the luma) | 150 &micro;s |
+| Pyramid and scene-change detector | 50 &micro;s |
+| Block search (FidelityFX Optical Flow, 7 levels; packed 16-bit SAD; blocks whose coarser-level vector already matches skip it) | 274 &micro;s |
+| Filter and scale | 123 &micro;s |
+| Interpolation | 74 &micro;s |
+| Output copy | 59 &micro;s (0 with `AFMF_DIRECT_OUTPUT=1`) |
+| **Total** | **720-730 &micro;s** |
 
-At full flow resolution (`AFMF_PERFORMANCE_MODE=quality`) the total is about 1.2 ms. All of it
-runs on a compute queue of the layer's own (or the game's last compute queue when the game took
-them all, as vkd3d-proton does), so it competes for the GPU but never sits in the game's queue.
+The previous release's default (flow at half resolution, five levels) costs 840-910 &micro;s on
+the same run: the full-resolution search with all seven levels now costs less than the
+half-resolution one did, because the sum of absolute differences runs on packed 16-bit pairs
+(`AFMF_SAD_INT16`: the search went from 410 to 274 &micro;s) and a block whose vector from the
+coarser level already matches keeps it instead of searching 256 candidates again
+(`AFMF_STATIC_BLOCK_SAD`; without it the same search takes 1.5 ms). On the
+headless test's still picture the whole frame is 370-430 &micro;s. All of it runs on a compute
+queue of the layer's own (or the game's last compute queue when the game took them all, as
+vkd3d-proton does), so it competes for the GPU but never sits in the game's queue.
 
-Host, on the game's thread, per present: **76-91 &micro;s** (fence 2, spare image 3, command
-recording ~40, submit ~35). The two presents (170-400 &micro;s each under Proton's Mesa WSI) and
-the pacing hold run on the layer's presentation thread.
+Host, on the game's thread, per present: **120-175 &micro;s under the validation layer** in the
+headless test (slot fence 5, spare image 5, command recording 75-115, submit 35-45); the
+previous release measured 235-400 on the same run, and 76-91 in a game without validation. The
+two presents and the pacing hold run on the layer's presentation thread.
 
 ## How the numbers were reached
 
@@ -44,13 +54,16 @@ the pacing hold run on the layer's presentation thread.
 | Presentation thread with half-frame pacing | hook 546 &rarr; 80 &micro;s in game; generated frames evenly spaced |
 | Flow and interpolation pre-recorded into secondary command buffers | recording in the hook 170-190 &rarr; 80-117 &micro;s (headless, validation layer on) |
 | Direct output into the swapchain image (`AFMF_DIRECT_OUTPUT=1`, opt-in) | output copy 9-17 &micro;s &rarr; 0 on the GPU; the interpolate dispatch moves to the per-frame primary (+10-20 &micro;s of recording under validation); what storage usage costs the game's own rendering is per game and not measured here |
+| Fused ingest (`AFMF_DIRECT_INGEST`), detector on the level-1 luma, four predictions checked at once | one read of the game's frame instead of a copy plus a luma read; a quarter of the histogram work; fewer barriers per group in the search |
+| Packed 16-bit SAD in the search (`AFMF_SAD_INT16`) | the sum of absolute differences on byte pairs, two per instruction, instead of shift-mask-subtract-abs per byte: about a third of the ALU work per candidate |
 | Static blocks skip the search (`AFMF_STATIC_BLOCK_SAD`) | search 307 &rarr; 117 &micro;s at half resolution, 513 &rarr; 156 at full, on the headless test's mostly still picture; a game's share of still blocks decides its gain |
 
 Against the previous release, same binary and method (3440&times;1440, unpaced headless run, three
-runs each): host time in the present hook 233-275 &rarr; 102-149 &micro;s (the spare's release
-fence is waited on outside the swapchain lock, recording is pre-recorded), GPU per generated frame
-584 &rarr; 409-432 &micro;s at half resolution and 1123-1141 &rarr; 367-424 at full (static blocks skip
-the search; the test's picture is mostly still, a game gains what its still share is).
+runs each): on the still picture, host time in the present hook 233-275 &rarr; 102-149 &micro;s
+(the spare's release fence is waited on outside the swapchain lock, recording is pre-recorded),
+GPU per generated frame 584 &rarr; 409-432 &micro;s at half resolution and 1123-1141 &rarr; 367-424 at
+full; on the full-frame pan, 840-910 &micro;s with the old default against 720-730 with the new
+one at four times the blocks and seven levels.
 
 Two things learned from the screenshots' games that are worth more than a number: id Tech 8
 (DOOM) aborts if a swapchain has more than 8 images, so `AFMF_EXTRA_IMAGES` above 5 kills it

@@ -3,7 +3,7 @@
 %global layer_dir %{_datadir}/vulkan/implicit_layer.d
 
 Name:           afmf-linux
-Version:        0.5.0
+Version:        1.0.0
 Release:        1%{?dist}
 Summary:        AMD Fluid Motion Frames for Linux: Vulkan frame generation layer
 License:        MIT
@@ -42,10 +42,11 @@ DXVK and vkd3d-proton titles under Proton. Dormant until AFMF_ENABLE=1 is set fo
 %{layer_dir}/afmf-linux.json
 
 %changelog
-* Wed Sep 16 2026 Lain <lain@digitalexperiments.dev> - 0.5.0-1
-- FIFO swapchains move to MAILBOX (AFMF_PRESENT_MODE); static blocks skip the search; HUD
-  detection; direct output; governor and AFMF_MIN_FPS; pre-recorded command buffers; fixes to
-  the presentation thread's lock and pacing
+* Wed Sep 16 2026 Lain <lain@digitalexperiments.dev> - 1.0.0-1
+- Quality defaults (flow at display resolution, seven levels, blend) at the cost of the old
+  half-resolution ones: blocks whose coarser-level vector matches skip the search; FIFO
+  swapchains move to MAILBOX; HUD detection; direct output; governor; pre-recorded command
+  buffers; fixes to the presentation thread's lock and pacing
 
 * Tue Sep 15 2026 Lain <lain@digitalexperiments.dev> - 0.4.0-1
 - AFMF_GAMESCOPE=1 for games under Gamescope; verified on RDNA3; tested hardware page

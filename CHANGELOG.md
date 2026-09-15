@@ -6,7 +6,7 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-09-16
+## [1.0.0] - 2026-09-16
 
 ### Added
 - `AFMF_PRESENT_MODE` (`auto`): a swapchain created in FIFO is created in MAILBOX when the surface
@@ -18,6 +18,16 @@ All notable changes to afmf-linux are documented here. The format follows
   two frames (their SAD at rest, which the SDK already computed for its level-0 fallback, is taken
   first); still parts of the picture cost nothing to search. One marked edit in the vendored
   search shader, listed in `shaders/fidelityfx/NOTICE.md`.
+- The scene change detector histograms the level-1 luma (a quarter of the pixels; it normalises
+  its histograms, so the threshold is the same), and the block search checks a group's four
+  predictions at once before any of them searches.
+- `AFMF_SAD_INT16` (on): the block search's sum of absolute differences runs on packed 16-bit
+  byte pairs (`v_pk_*` on RDNA) instead of one byte at a time, from a second build of the SDK's
+  search pass; the layer enables `shaderInt16` at device creation when the game did not and the
+  device offers it. Test `headless_pan_scalar_sad` checks the SDK's sum gives the same field.
+- `AFMF_DIRECT_INGEST` (on): the game's frame is read once, from its swapchain image, into the
+  colour ring and the flow's luma by one pass, instead of copied and then read again by the
+  SDK's luma pass. Not on sRGB swapchains.
 - `AFMF_DIRECT_OUTPUT` (off): the interpolator writes the swapchain image itself instead of an
   internal image copied there; opt-in because it needs storage usage on the game's swapchain
   images, whose cost to the game's rendering only a game measurement can tell. Test
@@ -25,10 +35,15 @@ All notable changes to afmf-linux are documented here. The format follows
 - `AFMF_HUD_DETECT` (on): a pixel unchanged between the two frames on a moving block is kept as
   it is instead of warped, so a HUD, crosshair or subtitle over motion stays whole in the
   generated frame. Tests `headless_hud` and its negative control `headless_hud_negative`.
-- `AFMF_GOVERNOR` (off by default): under GPU contention, when the generated frame is ready later
-  than a whole frame twelve frames in a row, generation steps down (five search levels, then one
-  companion in two, then one in three) and steps back up after 20 frames ready within half a
-  frame; each step is logged. `AFMF_MIN_FPS` (30): no companions below that real frame rate.
+- Defaults now aim at quality: flow at display resolution with all seven pyramid levels
+  (`AFMF_PERFORMANCE_MODE=quality`, `AFMF_SEARCH_MODE=high`), `AFMF_FAST_MOTION_RESPONSE=blend`,
+  `AFMF_LOG=0`. The block search skips every block whose vector from the coarser level already
+  matches (`AFMF_STATIC_BLOCK_SAD`), which is what keeps the cost of the full search near the
+  previous release's half-resolution one.
+- `AFMF_GOVERNOR` (on by default): under GPU contention, when the generated frame is ready later
+  than a frame and a half thirty frames in a row, generation steps down (five search levels, then
+  one companion in two, then one in three) and steps back up after 15 frames ready within three
+  quarters of a frame; each step is logged. `AFMF_MIN_FPS` (30): no companions below that real frame rate.
 - Present ids (`VK_KHR_present_id` and `present_id2`, what DXVK attaches) are carried on the real
   frame by the presentation thread instead of forcing the present inline; tests `headless_present_id1`
   and `headless_present_id2`.
@@ -127,8 +142,8 @@ First public release.
 - Headless integration test under the Khronos validation layer, vkcube smoke test, sanitizer
   build, GCC `-fanalyzer` and ShellCheck gates.
 
-[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v0.5.0...HEAD
-[0.5.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.5.0
+[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.0.0
 [0.4.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.4.0
 [0.3.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.3.0
 [0.2.0]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/9535e06...2f442f5

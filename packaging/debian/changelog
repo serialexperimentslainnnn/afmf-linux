@@ -1,9 +1,12 @@
-afmf-linux (0.5.0-1) unstable; urgency=medium
+afmf-linux (1.0.0-1) unstable; urgency=medium
 
+  * Quality defaults: optical flow at display resolution with all seven pyramid levels and
+    blended fallback, at the cost of the old half-resolution default, because a block whose
+    vector from the coarser level already matches skips the search (AFMF_STATIC_BLOCK_SAD).
   * A FIFO swapchain is created in MAILBOX when the surface offers it (AFMF_PRESENT_MODE):
     the doubled presents no longer each take a refresh slot.
-  * Static blocks skip the block search (AFMF_STATIC_BLOCK_SAD); HUD detection
-    (AFMF_HUD_DETECT); direct output into the swapchain image (AFMF_DIRECT_OUTPUT, opt-in).
+  * HUD detection (AFMF_HUD_DETECT); direct output into the swapchain image
+    (AFMF_DIRECT_OUTPUT, opt-in).
   * Governor under GPU contention (AFMF_GOVERNOR) and AFMF_MIN_FPS; pre-recorded command
     buffers; present ids carried by the presentation thread.
   * Fixed: the presentation thread starving on the swapchain lock; pacing after a hitch.

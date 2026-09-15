@@ -34,7 +34,7 @@ Wilds max + RT Native AA **265 fps** (120 without), Cyberpunk 2077 RT Ultra FSR 
 page has each capture with its settings and launch options.
 
 [![Cyberpunk 2077 with ray tracing: 243 fps on screen with afmf-linux, 116 real per the game's counter](docs/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-5.jpg)](docs/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-5-full.jpg) In Monster Hunter Wilds (vkd3d-proton) it takes 120 real fps to ~250 on
-screen with 76-91 us of host time per frame; in Cyberpunk 2077 with ray tracing it doubles the
+screen with about a hundred microseconds of host time per frame; in Cyberpunk 2077 with ray tracing it doubles the
 base. Every frame gets a companion (26,380 of 26,381 in a session). Also verified on an RX 7800 XT
 (RDNA3): same results in the tests and in Cyberpunk 2077 (15,330 of 15,332 generated), at about
 three times the GPU cost per frame (1.2 ms at 3440x1440), so the gain is smaller when the game
@@ -137,19 +137,21 @@ Windows (search mode, performance mode, fast motion response) where such a setti
 |---|---|---|
 | `AFMF_ENABLE` | unset | `1` loads the layer |
 | `DISABLE_AFMF` | unset | `1` keeps it out even when enabled |
-| `AFMF_LOG` | `1` | `0` errors, `1` warnings, `2` info, `3` debug, all on stderr |
-| `AFMF_PERFORMANCE_MODE` | `auto` | `quality`: optical flow at display resolution (8 px blocks). `performance`: at half resolution (16 px blocks), about 2.5x cheaper. `auto`: `performance` from 2560x1440 up |
-| `AFMF_SEARCH_MODE` | `auto` | `standard`: 5 pyramid levels. `high`: 7 levels, motion up to +-512 flow pixels. `auto`: 7 at full resolution, 5 at half |
-| `AFMF_FAST_MOTION_RESPONSE` | `repeat` | What to show where the flow is unreliable: `repeat` the previous frame, or `blend` both |
+| `AFMF_LOG` | `0` | `0` errors, `1` warnings, `2` info, `3` debug, all on stderr |
+| `AFMF_PERFORMANCE_MODE` | `quality` | `quality`: optical flow at display resolution (8 px blocks). `performance`: at half resolution (16 px blocks), about 2.5x cheaper. `auto`: `performance` from 2560x1440 up |
+| `AFMF_SEARCH_MODE` | `high` | `standard`: 5 pyramid levels. `high`: 7 levels, motion up to +-512 flow pixels. `auto`: 7 at full resolution, 5 at half |
+| `AFMF_FAST_MOTION_RESPONSE` | `blend` | What to show where the flow is unreliable: `repeat` the previous frame, or `blend` both |
 | `AFMF_GAMESCOPE` | unset | `1` when the game runs under Gamescope (Steam Deck, or `gamescope -- <game>`): five extra images instead of two, and the layer passes through in the gamescope process itself |
 | `AFMF_EXTRA_IMAGES` | `2` (`5` with `AFMF_GAMESCOPE=1`) | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory; some engines abort above 8 images in total (id Tech 8) |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest the layer waits for the companion's image to be released before presenting the real frame alone. The image is requested a frame ahead, so the default never stalls the game |
 | `AFMF_PRESENT_MODE` | `auto` | `auto`: a swapchain the game creates in FIFO (vsync) is created in MAILBOX when the surface offers it, and a per-present switch back to FIFO is rewritten too. In FIFO every present takes a refresh slot and the layer doubles them, so a game above half the refresh rate loses real frames (120 at 165 Hz becomes 82); MAILBOX shows the latest frame and drops the excess. `keep` leaves the game's mode alone |
 | `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue and presents inline (diagnosis) |
 | `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: uneven cadence, the compositor may drop generated frames |
-| `AFMF_GOVERNOR` | `0` | `1` steps generation down while the GPU is contended (the generated frame ready later than a whole frame, twelve frames in a row): five search levels first, then one companion in two, then one in three; back up a step after 20 frames ready within half a frame. Off, every frame gets a companion regardless |
+| `AFMF_GOVERNOR` | `1` | `1` steps generation down while the GPU is contended (the generated frame ready later than a frame and a half, thirty frames in a row): five search levels first, then one companion in two, then one in three; back up a step after 15 frames ready within three quarters of a frame. Off, every frame gets a companion regardless |
 | `AFMF_MIN_FPS` | `30` | Below this real frame rate no companion is made: doubling 25 fps is not worth its latency. `0` removes the floor |
 | `AFMF_STATIC_BLOCK_SAD` | `128` | A block whose 64 pixels differ from the previous frame's at rest by no more than this (sum of absolute 8-bit luma differences) is static: vector 0, search skipped. `0` searches every block |
+| `AFMF_DIRECT_INGEST` | `1` | The game's frame is read once, straight from its swapchain image, into the layer's colour ring and the flow's luma (the previous release copied it, then computed the luma from the copy). Puts sampled usage on the game's swapchain images; `0` puts the copy back. Not for sRGB swapchains (the copy path stays there) |
+| `AFMF_SAD_INT16` | `1` | The block search sums its pixel differences on packed 16-bit pairs (two per instruction; needs `shaderInt16`, which the layer enables on the device when the game did not). `0` keeps the SDK's byte-at-a-time sum |
 | `AFMF_DIRECT_OUTPUT` | `0` | `1` writes the interpolated frame straight into the swapchain image instead of copying it there (saves the copy, 33 us at 3440x1440), which puts storage usage on the game's swapchain images; that can cost the game's own rendering more than it saves, so measure it per game. Needs a format that takes storage writes (not sRGB) |
 | `AFMF_HUD_DETECT` | `1` | A pixel that is the same in both frames (within one 8-bit level) while its block moves is a static overlay (HUD, crosshair, subtitles): it is kept instead of warped. `0` warps everything |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |

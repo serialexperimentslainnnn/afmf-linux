@@ -6,8 +6,9 @@ description: Measured cost of afmf-linux, the open AMD Fluid Motion Frames layer
 # Performance
 
 Every number below comes from the layer's own instrumentation (`AFMF_PROFILE=1`: GPU timestamps
-per stage, host timers per present) on an RX 9070 XT (RDNA4), Mesa 26.1.8 RADV, Fedora 44, KDE
-Plasma 6.7 Wayland, 3440&times;1440. Re-measure on your hardware; the method is the same.
+per stage, host timers per present). **Tested hardware: RX 9070 XT (RDNA4) and RX 7800 XT
+(RDNA3)**, Mesa 26.1.8 RADV, Fedora 44, KDE Plasma 6.7 Wayland, 3440&times;1440; the 9070 XT unless
+stated. Re-measure on your hardware; the method is the same.
 
 ## What a frame costs
 

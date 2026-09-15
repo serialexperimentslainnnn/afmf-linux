@@ -59,9 +59,15 @@ AFMF_ENABLE=1 %command%
 DEB, Arch and a plain tarball are on the [release page](https://github.com/{{ site.repository }}/releases/latest);
 the [install guide]({{ '/install/' | relative_url }}) covers every route, including building from source.
 
+## Tested hardware
+
+**AMD Radeon RX 9070 XT (RDNA4)** and **RX 7800 XT (RDNA3)**, Mesa 26.1.8 RADV, KDE Plasma
+Wayland, 3440&times;1440 at 165 Hz, with Monster Hunter Wilds and Cyberpunk 2077 under
+vkd3d-proton. Other GPUs and drivers: untested, reports welcome.
+
 ## Measured
 
-On an RX 9070 XT, Mesa 26.1.8, KDE Plasma Wayland, 3440&times;1440:
+On the RX 9070 XT unless stated, Mesa 26.1.8, KDE Plasma Wayland, 3440&times;1440:
 
 | Game | Base (Linux, no layer) | With afmf-linux |
 |---|---|---|

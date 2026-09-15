@@ -23,8 +23,11 @@ half-frame pacing (4-5 ms of added latency at 120 fps) AMD documents for AFMF.
 
 ## Status
 
-Developed and measured on an RX 9070 XT (RDNA4), Mesa 26.1.8 RADV, Fedora 44, KDE Plasma Wayland,
-3440x1440 at 165 Hz. In Monster Hunter Wilds (vkd3d-proton) it takes 120 real fps to ~250 on
+**Tested on: AMD Radeon RX 9070 XT (RDNA4) and RX 7800 XT (RDNA3)**, Mesa 26.1.8 RADV, Fedora 44,
+KDE Plasma Wayland, 3440x1440 at 165 Hz, with Monster Hunter Wilds and Cyberpunk 2077 under
+vkd3d-proton.
+
+Developed and measured on the RX 9070 XT. In Monster Hunter Wilds (vkd3d-proton) it takes 120 real fps to ~250 on
 screen with 76-91 us of host time per frame; in Cyberpunk 2077 with ray tracing it doubles the
 base. Every frame gets a companion (26,380 of 26,381 in a session). Also verified on an RX 7800 XT
 (RDNA3): same results in the tests and in Cyberpunk 2077 (15,330 of 15,332 generated), at about

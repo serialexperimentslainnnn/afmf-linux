@@ -1,0 +1,26 @@
+# Maintainer: Lain <lain@digitalexperiments.dev>
+pkgname=afmf-linux
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="AMD Fluid Motion Frames for Linux: Vulkan frame generation layer for any game (Proton, DXVK, native)"
+arch=('x86_64')
+url="https://serialexperimentslainnnn.github.io/afmf-linux/"
+license=('MIT')
+depends=('vulkan-icd-loader')
+makedepends=('cmake' 'ninja' 'gcc' 'vulkan-headers' 'glslang' 'spirv-tools')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/serialexperimentslainnnn/afmf-linux/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP') # set from the release tarball before publishing to the AUR
+
+build() {
+  cmake -S "$pkgname-$pkgver" -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DAFMF_WERROR=OFF
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 "$pkgname-$pkgver/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$pkgname-$pkgver/shaders/fidelityfx/LICENSE.txt" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.fidelityfx"
+  install -Dm644 "$pkgname-$pkgver/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 "$pkgname-$pkgver/shaders/fidelityfx/NOTICE.md" "$pkgdir/usr/share/doc/$pkgname/NOTICE.fidelityfx.md"
+}

@@ -1,0 +1,18 @@
+pkgbase = afmf-linux
+	pkgdesc = AMD Fluid Motion Frames for Linux: Vulkan frame generation layer for any game (Proton, DXVK, native)
+	pkgver = 0.3.0
+	pkgrel = 1
+	url = https://serialexperimentslainnnn.github.io/afmf-linux/
+	arch = x86_64
+	license = MIT
+	makedepends = cmake
+	makedepends = ninja
+	makedepends = gcc
+	makedepends = vulkan-headers
+	makedepends = glslang
+	makedepends = spirv-tools
+	depends = vulkan-icd-loader
+	source = afmf-linux-0.3.0.tar.gz::https://github.com/serialexperimentslainnnn/afmf-linux/archive/v0.3.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = afmf-linux

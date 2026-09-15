@@ -8,10 +8,21 @@
 
 struct afmf_framegen;
 
+/* Whether the interpolated frame can be written straight into a swapchain image of this format
+ * (the image then needs STORAGE usage): the format takes storage writes, and either has a SPIR-V
+ * image format or the application enabled shaderStorageImageWriteWithoutFormat. */
+bool afmf_framegen_can_write_direct(const struct afmf_device *dev, VkFormat swapchain_format);
+
 /* NULL when the swapchain format has no interpolation variant or the device lacks a required
- * format feature; the caller then falls back to repeating frames. */
+ * format feature; the caller then falls back to repeating frames. With `direct_targets` (the
+ * swapchain's images, created with STORAGE usage) the interpolator writes into them; NULL means
+ * an internal image copied into the target at record time. */
 struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swapchain_format,
-                                           VkExtent2D extent, uint32_t slots);
+                                           VkExtent2D extent, uint32_t slots,
+                                           const VkImage *direct_targets, uint32_t target_count);
+
+/* True when the interpolator writes the target itself: the caller hands it in GENERAL layout. */
+bool afmf_framegen_direct(const struct afmf_framegen *fg);
 
 void afmf_framegen_destroy(struct afmf_device *dev, struct afmf_framegen *fg);
 
@@ -28,9 +39,10 @@ void afmf_framegen_set_family(struct afmf_device *dev, struct afmf_framegen *fg,
  *   3. when `target` is not VK_NULL_HANDLE (a swapchain image in TRANSFER_DST_OPTIMAL): the
  *      interpolated frame between the previous and the new one, copied into it.
  * Without a target the frame only enters the history (about a fifth of the cost).
- * `slot` selects the constants region so `slots` command buffers can be in flight. */
+ * `slot` selects the constants region so `slots` command buffers can be in flight;
+ * `target_index` is the target's index in the swapchain (direct output selects its view). */
 void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkCommandBuffer cmd,
-                          uint32_t slot, VkImage current, VkImage target);
+                          uint32_t slot, VkImage current, VkImage target, uint32_t target_index);
 
 /* Pyramid levels the search uses from now on, between 5 and what the swapchain was set up with;
  * fewer levels cost less and reach shorter motion. The governor lowers it under GPU contention. */

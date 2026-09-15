@@ -150,6 +150,7 @@ Windows (search mode, performance mode, fast motion response) where such a setti
 | `AFMF_GOVERNOR` | `1` | Steps generation down while the GPU is contended (the generated frame ready later than half the frame time, three frames in a row): five search levels first, then one companion in two, then one in three; back up a step after 60 frames ready early. `0` generates every frame regardless |
 | `AFMF_MIN_FPS` | `30` | Below this real frame rate no companion is made: doubling 25 fps is not worth its latency. `0` removes the floor |
 | `AFMF_STATIC_BLOCK_SAD` | `128` | A block whose 64 pixels differ from the previous frame's at rest by no more than this (sum of absolute 8-bit luma differences) is static: vector 0, search skipped. `0` searches every block |
+| `AFMF_DIRECT_OUTPUT` | `0` | `1` writes the interpolated frame straight into the swapchain image instead of copying it there (saves the copy, 33 us at 3440x1440), which puts storage usage on the game's swapchain images; that can cost the game's own rendering more than it saves, so measure it per game. Needs a format that takes storage writes (not sRGB) |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_PROFILE` | `0` | `1` logs GPU time per stage every 300 frames and at teardown |
 | `AFMF_DUMP_DIR` | unset | Writes the first generated frames as PPM files into that directory (8-bit formats only) |

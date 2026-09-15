@@ -16,6 +16,10 @@ All notable changes to afmf-linux are documented here. The format follows
   two frames (their SAD at rest, which the SDK already computed for its level-0 fallback, is taken
   first); still parts of the picture cost nothing to search. One marked edit in the vendored
   search shader, listed in `shaders/fidelityfx/NOTICE.md`.
+- `AFMF_DIRECT_OUTPUT` (off): the interpolator writes the swapchain image itself instead of an
+  internal image copied there; opt-in because it needs storage usage on the game's swapchain
+  images, whose cost to the game's rendering only a game measurement can tell. Test
+  `headless_direct_output`.
 - `AFMF_GOVERNOR` (on by default): under GPU contention, when the generated frame is ready later
   than half the frame time three frames in a row, generation steps down (five search levels, then
   one companion in two, then one in three) and steps back up once the GPU catches up; each step is

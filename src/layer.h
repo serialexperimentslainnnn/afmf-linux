@@ -125,6 +125,9 @@ struct afmf_device {
     VkQueue async_queue;
     uint32_t async_family;
     bool async_high_priority; /* VK_KHR_global_priority HIGH was granted for it */
+    /* The application enabled shaderStorageImageWriteWithoutFormat (DXVK and vkd3d-proton do):
+     * the layer may then store into a B8G8R8A8 swapchain image directly. */
+    bool storage_write_without_format;
     /* The application took every queue of every compute family (vkd3d-proton asks for all four
      * of RADV's), so `async_queue` is the last one it created: its own queue-level calls on it
      * are routed through `async_lock` too (afmf_Queue* in layer.c), since a VkQueue is

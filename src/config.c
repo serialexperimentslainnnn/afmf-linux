@@ -103,6 +103,11 @@ static void init(void)
      * rest; 128 is two levels per pixel on average, what temporal anti-aliasing leaves on a
      * still image. Under it the block is stored as static and its search is skipped. */
     long static_block_sad = 128;
+    /* Writing the interpolated frame straight into the swapchain image saves its copy (33 us at
+     * 3440x1440) but needs STORAGE usage on every swapchain image, which can cost the game's own
+     * rendering more than that (the driver may drop compression on them): off until measured
+     * in the game at hand. */
+    long direct_output = 0;
 
     static const struct choice search_modes[] = {{"auto", AFMF_SEARCH_AUTO},
                                                 {"standard", AFMF_SEARCH_STANDARD},
@@ -129,6 +134,7 @@ static void init(void)
     ok = read_bounded("AFMF_GOVERNOR", 0, 1, &governor) && ok;
     ok = read_bounded("AFMF_MIN_FPS", 0, 240, &min_fps) && ok;
     ok = read_bounded("AFMF_STATIC_BLOCK_SAD", 0, 16320, &static_block_sad) && ok;
+    ok = read_bounded("AFMF_DIRECT_OUTPUT", 0, 1, &direct_output) && ok;
 
     g_config.log_level = (int)log_level;
     g_config.extra_images = (uint32_t)extra_images;
@@ -148,6 +154,7 @@ static void init(void)
     g_config.governor = governor != 0;
     g_config.min_fps = (uint32_t)min_fps;
     g_config.static_block_sad = (uint32_t)static_block_sad;
+    g_config.direct_output = direct_output != 0;
     g_config.invalid = !ok;
 }
 

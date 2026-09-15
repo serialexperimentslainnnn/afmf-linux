@@ -8,12 +8,17 @@
 //
 // Compiled once per output format: AFMF_OUT_FORMAT in {rgba8, rgb10_a2, rgba16f}; AFMF_SWAP_RB=1
 // writes .bgra so a raw copy into a B8G8R8A8 swapchain image lands in the right channels.
+// AFMF_OUT_FORMAT_NONE=1 leaves the storage image unqualified (needs the device feature
+// shaderStorageImageWriteWithoutFormat): for writing straight into a B8G8R8A8 swapchain image.
 
 #version 450
 #extension GL_EXT_samplerless_texture_functions : require
 
 #ifndef AFMF_OUT_FORMAT
 #define AFMF_OUT_FORMAT rgba8
+#endif
+#ifndef AFMF_OUT_FORMAT_NONE
+#define AFMF_OUT_FORMAT_NONE 0
 #endif
 #ifndef AFMF_SWAP_RB
 #define AFMF_SWAP_RB 0
@@ -25,7 +30,11 @@ layout(set = 0, binding = 0) uniform sampler2D u_prev;
 layout(set = 0, binding = 1) uniform sampler2D u_cur;
 layout(set = 0, binding = 2) uniform itexture2D u_flow;      // rg16i, one texel per 8x8 block
 layout(set = 0, binding = 3, r32ui) uniform uimage2D u_scd;  // FidelityFX SCD output, 3 slots
+#if AFMF_OUT_FORMAT_NONE
+layout(set = 0, binding = 4) writeonly uniform image2D u_out;
+#else
 layout(set = 0, binding = 4, AFMF_OUT_FORMAT) uniform image2D u_out;
+#endif
 
 layout(push_constant) uniform Params {
     ivec2 size;          // output size in pixels

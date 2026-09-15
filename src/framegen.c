@@ -68,7 +68,16 @@ enum pass {
     PASS_COUNT
 };
 
-enum variant { VARIANT_RGBA8, VARIANT_RGBA8_BGRA, VARIANT_RGB10A2, VARIANT_RGBA16F, VARIANT_COUNT };
+/* VARIANT_NOFORMAT stores without a SPIR-V image format (shaderStorageImageWriteWithoutFormat):
+ * direct output into a B8G8R8A8 swapchain image, whose format has no SPIR-V equivalent. */
+enum variant {
+    VARIANT_RGBA8,
+    VARIANT_RGBA8_BGRA,
+    VARIANT_RGB10A2,
+    VARIANT_RGBA16F,
+    VARIANT_NOFORMAT,
+    VARIANT_COUNT
+};
 
 #define SAMPLED VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
 #define STORAGE VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -145,6 +154,7 @@ static const struct {
     [VARIANT_RGBA8_BGRA] = {afmf_interpolate_rgba8_bgra_spv, afmf_interpolate_rgba8_bgra_spv_size},
     [VARIANT_RGB10A2] = {afmf_interpolate_rgb10a2_spv, afmf_interpolate_rgb10a2_spv_size},
     [VARIANT_RGBA16F] = {afmf_interpolate_rgba16f_spv, afmf_interpolate_rgba16f_spv_size},
+    [VARIANT_NOFORMAT] = {afmf_interpolate_noformat_spv, afmf_interpolate_noformat_spv_size},
 };
 
 /* ---- per-device pipelines ------------------------------------------------------------------ */
@@ -270,6 +280,8 @@ static VkResult pipelines_create(struct afmf_device *dev)
             return res;
     }
     for (uint32_t v = 0; v < VARIANT_COUNT; v++) {
+        if (v == VARIANT_NOFORMAT && !dev->storage_write_without_format)
+            continue; /* needs the feature the application did not enable; never used then */
         VkResult res = create_compute_pipeline(dev, interpolate_variants[v].spirv,
                                                interpolate_variants[v].spirv_size,
                                                p->layouts[PASS_INTERPOLATE], NULL, &p->interpolate[v]);
@@ -330,7 +342,15 @@ struct afmf_framegen {
     enum half_variant half;
     VkFormat color_format; /* UNORM sibling of the swapchain format: same bytes, no sRGB decode */
     VkFormat out_format;
+    VkFormat swapchain_format;
     enum variant variant;
+    /* Direct output (AFMF_DIRECT_OUTPUT): the interpolator writes the swapchain image through a
+     * storage view per image, with an interpolate set per (parity, image); `output` is unused. */
+    bool direct;
+    enum variant direct_variant;
+    uint32_t target_count;
+    VkImageView *target_views;
+    VkDescriptorSet *direct_sets; /* [parity * target_count + image] */
     uint32_t transfer_function; /* FidelityFX backbuffer transfer function id */
     float min_luminance, max_luminance;
 
@@ -528,6 +548,36 @@ static bool format_supports(const struct afmf_device *dev, VkFormat format,
     return (props.optimalTilingFeatures & features) == features;
 }
 
+/* The interpolate variant that stores into a view of the swapchain's own format, or VARIANT_COUNT
+ * when none can (sRGB formats take no storage writes; B8G8R8A8 has no SPIR-V format). */
+static enum variant direct_variant_for(const struct afmf_device *dev, VkFormat swapchain_format)
+{
+    if (!format_supports(dev, swapchain_format, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT))
+        return VARIANT_COUNT;
+    switch (swapchain_format) {
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        return VARIANT_RGBA8;
+    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+        return VARIANT_RGB10A2;
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        return VARIANT_RGBA16F;
+    case VK_FORMAT_B8G8R8A8_UNORM:
+        return dev->storage_write_without_format ? VARIANT_NOFORMAT : VARIANT_COUNT;
+    default:
+        return VARIANT_COUNT;
+    }
+}
+
+bool afmf_framegen_can_write_direct(const struct afmf_device *dev, VkFormat swapchain_format)
+{
+    return direct_variant_for(dev, swapchain_format) != VARIANT_COUNT;
+}
+
+bool afmf_framegen_direct(const struct afmf_framegen *fg)
+{
+    return fg->direct;
+}
+
 static uint32_t align_up(uint32_t value, uint32_t alignment)
 {
     return (value + alignment - 1) / alignment * alignment;
@@ -590,10 +640,12 @@ static VkResult resources_create(struct afmf_device *dev, struct afmf_framegen *
         if (res != VK_SUCCESS)
             return res;
     }
-    res = image_create(dev, &fg->output, fg->out_format, fg->extent,
-                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    if (res != VK_SUCCESS)
-        return res;
+    if (!fg->direct) {
+        res = image_create(dev, &fg->output, fg->out_format, fg->extent,
+                           VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+        if (res != VK_SUCCESS)
+            return res;
+    }
 
     VkSamplerCreateInfo sampler = {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -877,12 +929,16 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
 {
     const struct afmf_framegen_pipelines *pl = dev->framegen_pipelines;
 
+    uint32_t direct_sets = fg->direct ? 2u * fg->target_count : 0u; /* one interpolate set each */
     VkDescriptorPoolSize sizes[] = {
-        {SAMPLED, 2 * 42}, {STORAGE, 2 * 49}, {COMBINED, 2 * 3}, {UBO, 2 * 25},
+        {SAMPLED, 2 * 42 + direct_sets},
+        {STORAGE, 2 * 49 + 2 * direct_sets},
+        {COMBINED, 2 * 3 + 2 * direct_sets},
+        {UBO, 2 * 25},
     };
     VkDescriptorPoolCreateInfo pool = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = 2 * SET_COUNT,
+        .maxSets = 2 * SET_COUNT + direct_sets,
         .poolSizeCount = (uint32_t)(sizeof sizes / sizeof sizes[0]),
         .pPoolSizes = sizes,
     };
@@ -914,6 +970,26 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
         res = dev->fns.allocate_descriptor_sets(dev->handle, &alloc, fg->sets[p]);
         if (res != VK_SUCCESS)
             return res;
+    }
+    if (fg->direct) {
+        VkDescriptorSetLayout interpolate_layouts[16];
+        for (uint32_t j = 0; j < fg->target_count; j++)
+            interpolate_layouts[j] = pl->set_layouts[PASS_INTERPOLATE];
+        fg->direct_sets = calloc(direct_sets, sizeof *fg->direct_sets);
+        if (fg->direct_sets == NULL)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        for (uint32_t p = 0; p < 2; p++) {
+            VkDescriptorSetAllocateInfo alloc = {
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .descriptorPool = fg->pool,
+                .descriptorSetCount = fg->target_count,
+                .pSetLayouts = interpolate_layouts,
+            };
+            res = dev->fns.allocate_descriptor_sets(dev->handle, &alloc,
+                                                    fg->direct_sets + p * fg->target_count);
+            if (res != VK_SUCCESS)
+                return res;
+        }
     }
 
     for (uint32_t p = 0; p < 2; p++) {
@@ -979,13 +1055,17 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
             writer_end(&w);
         }
 
-        writer_begin(&w, dev, fg->sets[p][SET_INTERPOLATE]);
-        writer_image(&w, 0, COMBINED, fg->color[q].view, fg->sampler);
-        writer_image(&w, 1, COMBINED, fg->color[p].view, fg->sampler);
-        writer_image(&w, 2, SAMPLED, fg->flow_out.view, VK_NULL_HANDLE);
-        writer_image(&w, 3, STORAGE, fg->scd_output.view, VK_NULL_HANDLE);
-        writer_image(&w, 4, STORAGE, fg->output.view, VK_NULL_HANDLE);
-        writer_end(&w);
+        for (uint32_t j = 0; j < (fg->direct ? fg->target_count : 1u); j++) {
+            writer_begin(&w, dev, fg->direct ? fg->direct_sets[p * fg->target_count + j]
+                                             : fg->sets[p][SET_INTERPOLATE]);
+            writer_image(&w, 0, COMBINED, fg->color[q].view, fg->sampler);
+            writer_image(&w, 1, COMBINED, fg->color[p].view, fg->sampler);
+            writer_image(&w, 2, SAMPLED, fg->flow_out.view, VK_NULL_HANDLE);
+            writer_image(&w, 3, STORAGE, fg->scd_output.view, VK_NULL_HANDLE);
+            writer_image(&w, 4, STORAGE, fg->direct ? fg->target_views[j] : fg->output.view,
+                         VK_NULL_HANDLE);
+            writer_end(&w);
+        }
 
         if (fg->flow_scale > 1) {
             writer_begin(&w, dev, fg->sets[p][SET_DOWNSAMPLE]);
@@ -1044,6 +1124,11 @@ void afmf_framegen_destroy(struct afmf_device *dev, struct afmf_framegen *fg)
     if (fg->secondary_pool != VK_NULL_HANDLE)
         dev->fns.destroy_command_pool(dev->handle, fg->secondary_pool, NULL); /* frees the buffers */
     free(fg->secondaries);
+    for (uint32_t j = 0; fg->target_views != NULL && j < fg->target_count; j++)
+        if (fg->target_views[j] != VK_NULL_HANDLE)
+            dev->fns.destroy_image_view(dev->handle, fg->target_views[j], NULL);
+    free(fg->target_views);
+    free(fg->direct_sets);
     if (fg->pool != VK_NULL_HANDLE)
         dev->fns.destroy_descriptor_pool(dev->handle, fg->pool, NULL); /* frees the sets */
     if (fg->queries != VK_NULL_HANDLE) {
@@ -1087,13 +1172,19 @@ void afmf_framegen_destroy(struct afmf_device *dev, struct afmf_framegen *fg)
 }
 
 struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swapchain_format,
-                                           VkExtent2D extent, uint32_t slots)
+                                           VkExtent2D extent, uint32_t slots,
+                                           const VkImage *direct_targets, uint32_t target_count)
 {
     struct afmf_framegen *fg = calloc(1, sizeof *fg);
     if (fg == NULL)
         return NULL;
     fg->extent = extent;
     fg->slots = slots;
+    fg->swapchain_format = swapchain_format;
+    fg->direct_variant = direct_variant_for(dev, swapchain_format);
+    fg->direct = direct_targets != NULL && target_count > 0 && target_count <= 16 &&
+                 fg->direct_variant != VARIANT_COUNT;
+    fg->target_count = fg->direct ? target_count : 0;
 
     /* Performance mode: the block search, 85 % of the cost, runs on a half-size frame; blocks
      * become 16 pixels on screen. Auto picks it from 1440p up, where the search dominates. */
@@ -1135,6 +1226,23 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
         blocker = "pipelines unavailable";
 
     VkResult res = VK_SUCCESS;
+    if (blocker == NULL && fg->direct) {
+        fg->target_views = calloc(fg->target_count, sizeof *fg->target_views);
+        if (fg->target_views == NULL)
+            res = VK_ERROR_OUT_OF_HOST_MEMORY;
+        for (uint32_t j = 0; res == VK_SUCCESS && j < fg->target_count; j++) {
+            VkImageViewCreateInfo view = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = direct_targets[j],
+                .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                .format = swapchain_format,
+                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+            };
+            res = dev->fns.create_image_view(dev->handle, &view, NULL, &fg->target_views[j]);
+        }
+        if (res != VK_SUCCESS)
+            blocker = "storage views of the swapchain images failed";
+    }
     if (blocker == NULL) {
         res = resources_create(dev, fg);
         if (res == VK_SUCCESS)
@@ -1152,10 +1260,10 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
         afmf_framegen_destroy(dev, fg);
         return NULL;
     }
-    AFMF_INFO("interpolation ready: %ux%u, flow at %ux%u (%ux%u blocks of %u px), %u pyramid levels",
+    AFMF_INFO("interpolation ready: %ux%u, flow at %ux%u (%ux%u blocks of %u px), %u pyramid levels%s",
               extent.width, extent.height, fg->of_extent.width, fg->of_extent.height,
               fg->flow_size[0].width, fg->flow_size[0].height, AFMF_FLOW_BLOCK * fg->flow_scale,
-              fg->levels);
+              fg->levels, fg->direct ? ", direct output" : "");
     return fg;
 }
 
@@ -1229,7 +1337,8 @@ static void initialize(struct afmf_device *dev, struct afmf_framegen *fg, VkComm
         }
     }
     to_general(dev, cmd, fg->flow_out.image);
-    to_general(dev, cmd, fg->output.image);
+    if (fg->output.image != VK_NULL_HANDLE) /* absent with direct output */
+        to_general(dev, cmd, fg->output.image);
     to_general(dev, cmd, fg->scd_histogram.image);
     to_general(dev, cmd, fg->scd_previous_histogram.image);
     to_general(dev, cmd, fg->scd_temp.image);
@@ -1317,9 +1426,31 @@ uint32_t afmf_framegen_max_levels(const struct afmf_framegen *fg)
     return fg->max_levels;
 }
 
+/* Records the interpolated frame with `set` (which names the output image). */
+static void record_interpolate(struct afmf_device *dev, struct afmf_framegen *fg,
+                               VkCommandBuffer cmd, uint32_t slot, VkDescriptorSet set,
+                               enum variant variant)
+{
+    const struct afmf_framegen_pipelines *pl = dev->framegen_pipelines;
+    uint32_t out_w = fg->extent.width, out_h = fg->extent.height;
+    struct interpolate_push push = {
+        .size = {(int32_t)out_w, (int32_t)out_h},
+        .block = (int32_t)AFMF_FLOW_BLOCK,
+        .fallback = afmf_config_get()->fast_motion == AFMF_RESPONSE_BLENDED_FRAMES ? 1 : 0,
+        .max_motion = AFMF_MAX_TRUSTED_MOTION,
+        .flow_scale = (float)fg->flow_scale,
+    };
+    dev->fns.cmd_push_constants(cmd, pl->layouts[PASS_INTERPOLATE], VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                (uint32_t)sizeof push, &push);
+    dispatch(dev, cmd, pl->interpolate[variant], pl->layouts[PASS_INTERPOLATE], set, NULL, 0,
+             (out_w + 7) / 8, (out_h + 7) / 8, 1);
+    profiler_mark(dev, fg, cmd, slot, STAGE_INTERPOLATE);
+}
+
 /* The fixed part of a frame: luma, pyramid, scene change detector, then, with a companion, the
- * coarse-to-fine search and the interpolated frame into fg->output. Depends only on the slot
- * (constants region), the parity (descriptor sets), `companion` and `levels`. */
+ * coarse-to-fine search and (unless the output is direct, which names the target) the
+ * interpolated frame into fg->output. Depends only on the slot (constants region), the parity
+ * (descriptor sets), `companion` and `levels`. */
 static void record_flow(struct afmf_device *dev, struct afmf_framegen *fg, VkCommandBuffer cmd,
                         uint32_t slot, uint32_t p, uint32_t levels, bool companion)
 {
@@ -1367,21 +1498,8 @@ static void record_flow(struct afmf_device *dev, struct afmf_framegen *fg, VkCom
     }
 
     /* The frame in between, into fg->output. */
-    if (companion) {
-        uint32_t out_w = fg->extent.width, out_h = fg->extent.height;
-        struct interpolate_push push = {
-            .size = {(int32_t)out_w, (int32_t)out_h},
-            .block = (int32_t)AFMF_FLOW_BLOCK,
-            .fallback = afmf_config_get()->fast_motion == AFMF_RESPONSE_BLENDED_FRAMES ? 1 : 0,
-            .max_motion = AFMF_MAX_TRUSTED_MOTION,
-            .flow_scale = (float)fg->flow_scale,
-        };
-        dev->fns.cmd_push_constants(cmd, pl->layouts[PASS_INTERPOLATE], VK_SHADER_STAGE_COMPUTE_BIT,
-                                    0, (uint32_t)sizeof push, &push);
-        dispatch(dev, cmd, pl->interpolate[fg->variant], pl->layouts[PASS_INTERPOLATE],
-                 fg->sets[p][SET_INTERPOLATE], NULL, 0, (out_w + 7) / 8, (out_h + 7) / 8, 1);
-        profiler_mark(dev, fg, cmd, slot, STAGE_INTERPOLATE);
-    }
+    if (companion && !fg->direct)
+        record_interpolate(dev, fg, cmd, slot, fg->sets[p][SET_INTERPOLATE], fg->variant);
 }
 
 /* Executes the pre-recorded fixed part for (slot, p, companion), recording it first when it has
@@ -1430,7 +1548,7 @@ static void execute_flow(struct afmf_device *dev, struct afmf_framegen *fg, VkCo
 }
 
 void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkCommandBuffer cmd,
-                          uint32_t slot, VkImage current, VkImage target)
+                          uint32_t slot, VkImage current, VkImage target, uint32_t target_index)
 {
     const struct afmf_framegen_pipelines *pl = dev->framegen_pipelines;
     uint32_t levels = fg->levels;
@@ -1464,20 +1582,28 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
     /* 2. Optical flow and interpolation: the pre-recorded part. */
     execute_flow(dev, fg, cmd, slot, p, levels, companion);
 
-    /* 3. The frame in between, into the target. */
+    /* 3. The frame in between, into the target: written by the interpolator itself (direct
+     *    output, target in GENERAL) or copied from fg->output (target in TRANSFER_DST). */
     if (companion) {
         uint32_t out_w = fg->extent.width, out_h = fg->extent.height;
-        copy_whole(dev, cmd, fg->output.image, VK_IMAGE_LAYOUT_GENERAL, target,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, fg->extent);
-        profiler_mark(dev, fg, cmd, slot, STAGE_OUTPUT);
+        if (fg->direct && target_index < fg->target_count) {
+            record_interpolate(dev, fg, cmd, slot, fg->direct_sets[p * fg->target_count + target_index],
+                               fg->direct_variant);
+        } else {
+            copy_whole(dev, cmd, fg->output.image, VK_IMAGE_LAYOUT_GENERAL, target,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, fg->extent);
+            profiler_mark(dev, fg, cmd, slot, STAGE_OUTPUT);
+        }
 
         if (afmf_framegen_dump_pending(fg)) {
             VkBufferImageCopy region = {
                 .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                 .imageExtent = {out_w, out_h, 1},
             };
-            dev->fns.cmd_copy_image_to_buffer(cmd, fg->output.image, VK_IMAGE_LAYOUT_GENERAL,
-                                              fg->dump_buffer, 1, &region);
+            if (fg->direct)
+                sync(dev, cmd); /* the copy reads what the dispatch just wrote */
+            dev->fns.cmd_copy_image_to_buffer(cmd, fg->direct ? target : fg->output.image,
+                                              VK_IMAGE_LAYOUT_GENERAL, fg->dump_buffer, 1, &region);
             fg->dump_recorded = true;
         }
     }

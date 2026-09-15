@@ -78,6 +78,7 @@ struct afmf_swapchain {
      * the application gave no list. */
     VkPresentModeKHR allowed_modes[8];
     uint32_t allowed_mode_count;
+    bool storage_usage; /* the images carry STORAGE usage for direct output (AFMF_DIRECT_OUTPUT) */
     uint32_t min_image_count;
 
     /* Frame generation state; everything below `gen_enabled` is unused when it is false. */
@@ -274,7 +275,9 @@ static VkResult gen_init(struct afmf_device *dev, struct afmf_swapchain *sc)
     if (res != VK_SUCCESS)
         return res;
     if (afmf_config_get()->interpolate)
-        sc->fg = afmf_framegen_create(dev, sc->format, sc->extent, sc->image_count);
+        sc->fg = afmf_framegen_create(dev, sc->format, sc->extent, sc->image_count,
+                                      sc->storage_usage ? sc->images : NULL,
+                                      sc->storage_usage ? sc->image_count : 0);
     return sc->fg != NULL ? VK_SUCCESS : create_history(dev, sc);
 }
 
@@ -528,7 +531,8 @@ static bool chain_allows_mailbox(const struct afmf_device *dev, VkSurfaceKHR sur
         used = (used + 15u) & ~(size_t)15u;
         if (size == 0 || used + size > AFMF_CHAIN_BYTES)
             return false;
-        VkBaseOutStructure *copy = (VkBaseOutStructure *)(storage + used / sizeof *storage);
+        size_t index = used / sizeof *storage;
+        VkBaseOutStructure *copy = (VkBaseOutStructure *)(storage + index);
         memcpy(copy, s, size);
         copy->pNext = NULL;
         if (copy->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT) {
@@ -559,7 +563,19 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
     uint32_t chain_mode_count = 0;
     bool async = false;
     bool fifo_to_mailbox = false;
+    bool storage_usage = false;
     if (blocker == NULL) {
+        /* Direct output: the interpolator writes the swapchain image, so it needs STORAGE usage;
+         * only where the surface and the format take it (sRGB formats do not). */
+        if (afmf_config_get()->direct_output) {
+            storage_usage = (caps.supportedUsageFlags & VK_IMAGE_USAGE_STORAGE_BIT) != 0 &&
+                            afmf_framegen_can_write_direct(dev, info->imageFormat);
+            if (storage_usage)
+                patched.imageUsage |= VK_IMAGE_USAGE_STORAGE_BIT;
+            else
+                AFMF_INFO("direct output unavailable for format %d on this surface; copying",
+                          (int)info->imageFormat);
+        }
         /* Every present takes a refresh slot in FIFO and the layer doubles the presents: a game
          * above half the refresh rate loses real frames (120 at 165 Hz -> 82). MAILBOX shows the
          * latest frame and drops the excess instead, which is what the doubling needs. */
@@ -626,6 +642,7 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
     sc->extent = info->imageExtent;
     sc->present_mode = patched.presentMode;
     sc->fifo_to_mailbox = fifo_to_mailbox;
+    sc->storage_usage = storage_usage;
     memcpy(sc->allowed_modes, chain_modes, chain_mode_count * sizeof *chain_modes);
     sc->allowed_mode_count = chain_mode_count;
     sc->min_image_count = info->minImageCount;
@@ -775,19 +792,24 @@ static VkResult record_frame(struct afmf_device *dev, struct afmf_swapchain *sc,
     const VkPipelineStageFlags bottom = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
 
     if (sc->fg != NULL) {
+        /* The target is written by a copy (TRANSFER_DST) or, with direct output, by the
+         * interpolator's stores (GENERAL). */
+        bool direct = afmf_framegen_direct(sc->fg);
+        const VkPipelineStageFlags compute = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        VkImageLayout written = direct ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        VkAccessFlags write = direct ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT;
+        VkPipelineStageFlags writer = direct ? compute : transfer;
         image_barrier(dev, cmd, sc->images[i], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT, top,
                       transfer);
         if (generate)
-            image_barrier(dev, cmd, sc->images[j], VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT, top,
-                          transfer);
+            image_barrier(dev, cmd, sc->images[j], VK_IMAGE_LAYOUT_UNDEFINED, written, 0, write, top,
+                          writer);
         afmf_framegen_record(dev, sc->fg, cmd, slot, sc->images[i],
-                             generate ? sc->images[j] : VK_NULL_HANDLE);
+                             generate ? sc->images[j] : VK_NULL_HANDLE, j);
         if (generate)
-            image_barrier(dev, cmd, sc->images[j], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                          VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0, transfer,
-                          bottom);
+            image_barrier(dev, cmd, sc->images[j], written, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, write, 0,
+                          writer, bottom);
         image_barrier(dev, cmd, sc->images[i], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                       VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_READ_BIT, 0, transfer,
                       bottom);

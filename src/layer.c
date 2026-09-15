@@ -552,6 +552,13 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
             dev->app_families[dev->app_family_count++] = family;
     }
 
+    dev->storage_write_without_format =
+        info->pEnabledFeatures != NULL && info->pEnabledFeatures->shaderStorageImageWriteWithoutFormat;
+    for (const VkBaseInStructure *s = info->pNext; s != NULL; s = s->pNext)
+        if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
+            dev->storage_write_without_format =
+                ((const VkPhysicalDeviceFeatures2 *)s)->features.shaderStorageImageWriteWithoutFormat;
+
     /* Ask for the layer's queue alongside the application's. */
     VkDeviceCreateInfo patched = *info;
     VkDeviceQueueCreateInfo *queues = NULL;

@@ -92,6 +92,7 @@ afmf_glsl(afmf_interpolate_rgba8 "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgba8 -DAFMF
 afmf_glsl(afmf_interpolate_rgba8_bgra "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgba8 -DAFMF_SWAP_RB=1)
 afmf_glsl(afmf_interpolate_rgb10a2 "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgb10_a2 -DAFMF_SWAP_RB=0)
 afmf_glsl(afmf_interpolate_rgba16f "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgba16f -DAFMF_SWAP_RB=0)
+afmf_glsl(afmf_interpolate_noformat "${AFMF_INTERP}" -DAFMF_OUT_FORMAT_NONE=1 -DAFMF_SWAP_RB=0)
 
 # The half-resolution downsample for performance mode: 8-bit, or half floats for scRGB.
 set(AFMF_DOWNSAMPLE "${CMAKE_SOURCE_DIR}/shaders/afmf_downsample.comp")
@@ -240,6 +241,15 @@ set_tests_properties(headless_present_mode_auto PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_PRESENT_MODES=1;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
     FAIL_REGULAR_EXPRESSION "validation error|^failed|present mode 2|presenting inline"
+    SKIP_RETURN_CODE 77
+)
+# AFMF_DIRECT_OUTPUT=1: the interpolator writes the swapchain image itself (the headless surface
+# gives R8G8B8A8_UNORM, which takes storage writes); the golden check reads that image.
+add_test(NAME headless_direct_output COMMAND afmf_headless)
+set_tests_properties(headless_direct_output PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DIRECT_OUTPUT=1;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-direct;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
+    FAIL_REGULAR_EXPRESSION "validation error|^failed|direct output unavailable"
     SKIP_RETURN_CODE 77
 )
 add_test(NAME headless_present_mode_keep COMMAND afmf_headless)

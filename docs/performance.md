@@ -43,7 +43,14 @@ the pacing hold run on the layer's presentation thread.
 | Shared compute queue when the game holds every compute queue | GPU work off the graphics queue in vkd3d-proton titles |
 | Presentation thread with half-frame pacing | hook 546 &rarr; 80 &micro;s in game; generated frames evenly spaced |
 | Flow and interpolation pre-recorded into secondary command buffers | recording in the hook 170-190 &rarr; 80-117 &micro;s (headless, validation layer on) |
+| Direct output into the swapchain image (`AFMF_DIRECT_OUTPUT=1`, opt-in) | output copy 9-17 &micro;s &rarr; 0 on the GPU; the interpolate dispatch moves to the per-frame primary (+10-20 &micro;s of recording under validation); what storage usage costs the game's own rendering is per game and not measured here |
 | Static blocks skip the search (`AFMF_STATIC_BLOCK_SAD`) | search 307 &rarr; 117 &micro;s at half resolution, 513 &rarr; 156 at full, on the headless test's mostly still picture; a game's share of still blocks decides its gain |
+
+Against the previous release, same binary and method (3440&times;1440, unpaced headless run, three
+runs each): host time in the present hook 233-275 &rarr; 102-149 &micro;s (the spare's release
+fence is waited on outside the swapchain lock, recording is pre-recorded), GPU per generated frame
+584 &rarr; 409-432 &micro;s at half resolution and 1123-1141 &rarr; 367-424 at full (static blocks skip
+the search; the test's picture is mostly still, a game gains what its still share is).
 
 Two things learned from the screenshots' games that are worth more than a number: id Tech 8
 (DOOM) aborts if a swapchain has more than 8 images, so `AFMF_EXTRA_IMAGES` above 5 kills it

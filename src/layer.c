@@ -107,9 +107,75 @@ static struct afmf_device *device_take(void *key)
 static void device_free(struct afmf_device *dev)
 {
     pthread_mutex_destroy(&dev->lock);
+    pthread_mutex_destroy(&dev->async_lock);
     free(dev->queues);
     free(dev->queue_families);
+    free(dev->app_families);
     free(dev);
+}
+
+/* The queue family the layer's own queue should come from: compute without graphics first (the
+ * async compute engines on RDNA), then any compute family, provided it has a queue the
+ * application did not ask for. Returns UINT32_MAX when there is none; *index is the queue index
+ * to request within the family. */
+static uint32_t choose_async_family(const struct afmf_device *dev, const VkDeviceCreateInfo *info,
+                                    uint32_t *index)
+{
+    for (int compute_only = 1; compute_only >= 0; compute_only--) {
+        for (uint32_t f = 0; f < dev->queue_family_count; f++) {
+            VkQueueFlags flags = dev->queue_families[f].queueFlags;
+            if (!(flags & VK_QUEUE_COMPUTE_BIT) || (compute_only && (flags & VK_QUEUE_GRAPHICS_BIT)))
+                continue;
+            uint32_t requested = 0;
+            for (uint32_t i = 0; i < info->queueCreateInfoCount; i++)
+                if (info->pQueueCreateInfos[i].queueFamilyIndex == f)
+                    requested += info->pQueueCreateInfos[i].queueCount;
+            if (requested < dev->queue_families[f].queueCount) {
+                *index = requested;
+                return f;
+            }
+        }
+    }
+    return UINT32_MAX;
+}
+
+/* Copies the application's queue requests plus one queue in `family`. The arrays are the caller's
+ * to free after vkCreateDevice returned; NULL on allocation failure. */
+static VkDeviceQueueCreateInfo *queues_with_extra(const VkDeviceCreateInfo *info, uint32_t family,
+                                                  uint32_t *count, float **priorities)
+{
+    static const float one = 1.0f;
+    VkDeviceQueueCreateInfo *queues = calloc(info->queueCreateInfoCount + 1, sizeof *queues);
+    if (queues == NULL)
+        return NULL;
+    memcpy(queues, info->pQueueCreateInfos, info->queueCreateInfoCount * sizeof *queues);
+    *count = info->queueCreateInfoCount;
+    *priorities = NULL;
+
+    for (uint32_t i = 0; i < info->queueCreateInfoCount; i++) {
+        if (queues[i].queueFamilyIndex != family)
+            continue;
+        /* The family is already requested: one more queue, its priorities array extended. */
+        uint32_t n = queues[i].queueCount + 1;
+        *priorities = calloc(n, sizeof **priorities);
+        if (*priorities == NULL) {
+            free(queues);
+            return NULL;
+        }
+        memcpy(*priorities, queues[i].pQueuePriorities, queues[i].queueCount * sizeof **priorities);
+        (*priorities)[n - 1] = one;
+        queues[i].queueCount = n;
+        queues[i].pQueuePriorities = *priorities;
+        return queues;
+    }
+    queues[*count] = (VkDeviceQueueCreateInfo){
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .queueFamilyIndex = family,
+        .queueCount = 1,
+        .pQueuePriorities = &one,
+    };
+    (*count)++;
+    return queues;
 }
 
 bool afmf_device_queue_family(struct afmf_device *dev, VkQueue queue, uint32_t *family)
@@ -286,6 +352,7 @@ static bool load_device_fns(struct afmf_device *dev, PFN_vkGetDeviceProcAddr nex
     LOAD_DEVICE_FN(cmd_pipeline_barrier, vkCmdPipelineBarrier);
     LOAD_DEVICE_FN(cmd_copy_image, vkCmdCopyImage);
     LOAD_DEVICE_FN(queue_submit, vkQueueSubmit);
+    LOAD_DEVICE_FN(queue_wait_idle, vkQueueWaitIdle);
     LOAD_DEVICE_FN(create_shader_module, vkCreateShaderModule);
     LOAD_DEVICE_FN(destroy_shader_module, vkDestroyShaderModule);
     LOAD_DEVICE_FN(create_descriptor_set_layout, vkCreateDescriptorSetLayout);
@@ -333,7 +400,7 @@ static bool load_device_fns(struct afmf_device *dev, PFN_vkGetDeviceProcAddr nex
            f->create_fence && f->destroy_fence && f->wait_for_fences && f->reset_fences &&
            f->create_command_pool && f->destroy_command_pool && f->allocate_command_buffers &&
            f->begin_command_buffer && f->end_command_buffer && f->cmd_pipeline_barrier &&
-           f->cmd_copy_image && f->queue_submit && f->create_shader_module &&
+           f->cmd_copy_image && f->queue_submit && f->queue_wait_idle && f->create_shader_module &&
            f->destroy_shader_module && f->create_descriptor_set_layout &&
            f->destroy_descriptor_set_layout && f->create_pipeline_layout &&
            f->destroy_pipeline_layout && f->create_compute_pipelines && f->destroy_pipeline &&
@@ -365,29 +432,20 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
     if (next_create == NULL)
         return VK_ERROR_INITIALIZATION_FAILED;
 
-    link->u.pLayerInfo = link->u.pLayerInfo->pNext;
-    VkResult res = next_create(physical_device, info, alloc, out);
-    if (res != VK_SUCCESS)
-        return res;
-
+    /* Everything about the physical device is needed before creation: the queue families decide
+     * whether the layer can ask for a compute queue of its own. */
     struct afmf_device *dev = calloc(1, sizeof *dev);
-    if (dev == NULL || !load_device_fns(dev, next_gdpa, out)) {
-        PFN_vkDestroyDevice next_destroy = (PFN_vkDestroyDevice)next_gdpa(*out, "vkDestroyDevice");
-        if (next_destroy != NULL)
-            next_destroy(*out, alloc);
-        free(dev);
-        *out = VK_NULL_HANDLE;
-        return dev == NULL ? VK_ERROR_OUT_OF_HOST_MEMORY : VK_ERROR_INITIALIZATION_FAILED;
-    }
-
-    dev->key = dispatch_key(*out);
-    dev->handle = *out;
+    if (dev == NULL)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
     dev->physical_device = physical_device;
     dev->gdpa = next_gdpa;
     dev->set_loader_data = loader_data != NULL ? loader_data->u.pfnSetDeviceLoaderData : NULL;
     dev->lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    dev->async_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     dev->ifns.get_surface_capabilities = (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)next_gipa(
         inst->handle, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+    dev->ifns.get_surface_support = (PFN_vkGetPhysicalDeviceSurfaceSupportKHR)next_gipa(
+        inst->handle, "vkGetPhysicalDeviceSurfaceSupportKHR");
     dev->ifns.get_format_properties = (PFN_vkGetPhysicalDeviceFormatProperties)next_gipa(
         inst->handle, "vkGetPhysicalDeviceFormatProperties");
 
@@ -399,25 +457,83 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
     inst->get_memory_properties(physical_device, &dev->memory_properties);
     inst->get_queue_family_properties(physical_device, &dev->queue_family_count, NULL);
     dev->queue_families = calloc(dev->queue_family_count, sizeof *dev->queue_families);
+    dev->app_families = calloc(info->queueCreateInfoCount, sizeof *dev->app_families);
     for (uint32_t i = 0; i < info->queueCreateInfoCount; i++)
         dev->queue_capacity += info->pQueueCreateInfos[i].queueCount;
     dev->queues = calloc(dev->queue_capacity, sizeof *dev->queues);
-    if (dev->queue_families == NULL || dev->queues == NULL) {
-        dev->fns.destroy_device(*out, alloc);
+    if (dev->queue_families == NULL || dev->queues == NULL || dev->app_families == NULL) {
         device_free(dev);
-        *out = VK_NULL_HANDLE;
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
     inst->get_queue_family_properties(physical_device, &dev->queue_family_count,
                                       dev->queue_families);
+    for (uint32_t i = 0; i < info->queueCreateInfoCount; i++) {
+        uint32_t family = info->pQueueCreateInfos[i].queueFamilyIndex;
+        bool known = false;
+        for (uint32_t k = 0; k < dev->app_family_count && !known; k++)
+            known = dev->app_families[k] == family;
+        if (!known)
+            dev->app_families[dev->app_family_count++] = family;
+    }
+
+    /* Ask for the layer's queue alongside the application's. */
+    VkDeviceCreateInfo patched = *info;
+    VkDeviceQueueCreateInfo *queues = NULL;
+    float *priorities = NULL;
+    uint32_t async_index = 0;
+    uint32_t async_family = dev->set_loader_data != NULL
+                                ? choose_async_family(dev, info, &async_index)
+                                : UINT32_MAX;
+    if (async_family != UINT32_MAX) {
+        queues = queues_with_extra(info, async_family, &patched.queueCreateInfoCount, &priorities);
+        if (queues != NULL)
+            patched.pQueueCreateInfos = queues;
+        else
+            async_family = UINT32_MAX;
+    }
+
+    link->u.pLayerInfo = link->u.pLayerInfo->pNext;
+    VkResult res = next_create(physical_device, &patched, alloc, out);
+    free(queues);
+    free(priorities);
+    if (res != VK_SUCCESS) {
+        device_free(dev);
+        return res;
+    }
+
+    if (!load_device_fns(dev, next_gdpa, out)) {
+        PFN_vkDestroyDevice next_destroy = (PFN_vkDestroyDevice)next_gdpa(*out, "vkDestroyDevice");
+        if (next_destroy != NULL)
+            next_destroy(*out, alloc);
+        device_free(dev);
+        *out = VK_NULL_HANDLE;
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    dev->key = dispatch_key(*out);
+    dev->handle = *out;
+
+    if (async_family != UINT32_MAX) {
+        /* Obtained below the loader's trampoline: stamp the dispatch pointer, as for command
+         * buffers, or the next layer cannot route calls made with it. */
+        dev->fns.get_device_queue(*out, async_family, async_index, &dev->async_queue);
+        if (dev->async_queue != VK_NULL_HANDLE &&
+            dev->set_loader_data(*out, dev->async_queue) != VK_SUCCESS)
+            dev->async_queue = VK_NULL_HANDLE;
+        dev->async_family = async_family;
+    }
 
     pthread_mutex_lock(&g_lock);
     dev->next = g_devices;
     g_devices = dev;
     pthread_mutex_unlock(&g_lock);
 
-    AFMF_INFO("device %p created, VK_KHR_swapchain %s", (void *)*out,
-              dev->fns.queue_present != NULL ? "enabled" : "not enabled");
+    if (dev->async_queue != VK_NULL_HANDLE)
+        AFMF_INFO("device %p created, VK_KHR_swapchain %s, layer queue on family %u", (void *)*out,
+                  dev->fns.queue_present != NULL ? "enabled" : "not enabled", dev->async_family);
+    else
+        AFMF_INFO("device %p created, VK_KHR_swapchain %s, no spare compute queue: working on "
+                  "the application's",
+                  (void *)*out, dev->fns.queue_present != NULL ? "enabled" : "not enabled");
     return VK_SUCCESS;
 }
 

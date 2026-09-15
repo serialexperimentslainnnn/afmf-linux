@@ -19,7 +19,8 @@ has no interpolation variant fall back to repeating the previous frame.
 | Which swapchain formats interpolate and how | `src/framegen.c` `describe_format` | R8G8B8A8, B8G8R8A8 (+sRGB), A2B10G10R10, R16G16B16A16F |
 | FidelityFX sources (never edited) | `shaders/fidelityfx/` | `NOTICE.md` has tag, commit and mapping |
 | What is recorded per frame around framegen | `src/swapchain.c` `record_frame` | Image i arrives PRESENT_SRC and leaves PRESENT_SRC |
-| The present flow: acquire companion, submit, two presents | `src/swapchain.c` `present_generated` | Never blocks longer than `AFMF_ACQUIRE_TIMEOUT_US` |
+| The present flow: acquire companion, submit, two presents | `src/swapchain.c` `present_generated` | On `dev->async_queue` when the swapchain is `sc->async`; never blocks longer than `AFMF_ACQUIRE_TIMEOUT_US` |
+| The layer's own compute queue (family choice, extra queue request) | `src/layer.c` `choose_async_family`, `queues_with_extra` | Stamped with `pfnSetDeviceLoaderData` like command buffers |
 | Why a swapchain falls back to pass-through | `src/swapchain.c` `generation_blocker` | Logged at INFO with the reason |
 | Swapchain creation patch (extra images, transfer usage) | `src/swapchain.c` `afmf_swapchain_create` | |
 | Loader plumbing, dispatch tables, hooked functions | `src/layer.c` | `instance_hooks` / `device_hooks` / `swapchain_hooks` |
@@ -68,6 +69,7 @@ shaders, the driver or the resolution change; review this table with every optim
 | Date | Build | Total GPU/frame | Where it goes | Note |
 |---|---|---|---|---|
 | 2026-09-15 | `631b0c0` + profiler | 1222 us | block search 85 % (1038 us); everything else < 40 us each | Baseline; all on the application's queue |
+| 2026-09-15 | async queue | 1222 us (unchanged) | same | Work and presents moved to the layer's compute queue (RADV family 1); headless host critical path 5.58 -> 4.82 ms median of 3 (host is upload-bound, not a game proxy) |
 
 ## Commands
 | What | Command | Verified |
@@ -91,6 +93,11 @@ shaders, the driver or the resolution change; review this table with every optim
 - Commits: Conventional Commits, signed, as `Lain <lain@digitalexperiments.dev>`, no tool trailers.
 
 ## Minefields
+- **Async queue semantics**: swapchains are re-created `CONCURRENT` across the application's
+  families and ours so images i/j need no ownership transfers; both presents happen on our queue
+  (RADV reports present support on its compute family; checked per surface, fallback is the
+  application's queue). `async_lock` serialises our queue because applications present from
+  several threads. `gen_teardown` idles our queue before freeing anything.
 - **Shaders target Vulkan 1.1 / SPIR-V 1.3 on purpose**: a layer's modules are validated against the
   *application's* API version, and 1.2 modules failed spirv-val inside a 1.1 app. Applications on
   Vulkan 1.0 get no interpolation (the search pass needs subgroups); they get repeated frames.

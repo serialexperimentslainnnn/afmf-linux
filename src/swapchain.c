@@ -11,6 +11,8 @@
 
 /* Presents between two cadence reports at debug level. */
 #define AFMF_STATS_INTERVAL 300u
+/* Queue families a CONCURRENT swapchain can be shared between (the application's plus ours). */
+#define AFMF_MAX_FAMILIES 8u
 /* Wait semaphores an application may attach to one present before the layer gives up on it. */
 #define AFMF_MAX_APP_WAITS 8u
 
@@ -32,6 +34,7 @@ struct afmf_swapchain {
 
     /* Frame generation state; everything below `gen_enabled` is unused when it is false. */
     bool gen_enabled;
+    bool async;                 /* work and presents go to dev->async_queue */
     uint32_t image_count;
     VkImage *images;
     VkSemaphore *sem_generated; /* per image: signals "the generated frame in image k is ready" */
@@ -218,6 +221,12 @@ static bool ensure_pool(struct afmf_device *dev, struct afmf_swapchain *sc, uint
 static void gen_teardown(struct afmf_device *dev, struct afmf_swapchain *sc)
 {
     const struct afmf_device_fns *f = &dev->fns;
+    if (sc->async) {
+        /* The layer's queue may still be presenting from this swapchain. */
+        pthread_mutex_lock(&dev->async_lock);
+        (void)f->queue_wait_idle(dev->async_queue);
+        pthread_mutex_unlock(&dev->async_lock);
+    }
     if (sc->slots != NULL) {
         for (uint32_t i = 0; i < sc->image_count; i++) {
             struct afmf_slot *slot = &sc->slots[i];
@@ -297,11 +306,40 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
     const char *blocker = generation_blocker(dev, info, &caps);
 
     VkSwapchainCreateInfoKHR patched = *info;
+    uint32_t families[AFMF_MAX_FAMILIES];
+    bool async = false;
     if (blocker == NULL) {
         patched.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         /* Generated frames are presented from images of the same swapchain; the presentation
          * engine keeps a few queued, so one extra is not enough to find one free at present time. */
         patched.minImageCount += afmf_config_get()->extra_images;
+
+        /* With a queue of its own the layer works and presents from there, so the images must
+         * be usable from the application's families and ours without ownership transfers. */
+        VkBool32 can_present = VK_FALSE;
+        if (dev->async_queue != VK_NULL_HANDLE && dev->ifns.get_surface_support != NULL &&
+            dev->ifns.get_surface_support(dev->physical_device, dev->async_family, info->surface,
+                                          &can_present) == VK_SUCCESS &&
+            can_present) {
+            uint32_t n = 0;
+            const uint32_t *base = info->imageSharingMode == VK_SHARING_MODE_CONCURRENT
+                                       ? info->pQueueFamilyIndices
+                                       : dev->app_families;
+            uint32_t base_count = info->imageSharingMode == VK_SHARING_MODE_CONCURRENT
+                                      ? info->queueFamilyIndexCount
+                                      : dev->app_family_count;
+            for (uint32_t i = 0; i < base_count && n < AFMF_MAX_FAMILIES; i++)
+                if (base[i] != dev->async_family)
+                    families[n++] = base[i];
+            if (n < AFMF_MAX_FAMILIES)
+                families[n++] = dev->async_family;
+            if (n >= 2) {
+                patched.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+                patched.queueFamilyIndexCount = n;
+                patched.pQueueFamilyIndices = families;
+            }
+            async = true; /* n == 1 means the application already lives on our family */
+        }
     }
 
     VkResult res = dev->fns.create_swapchain(dev->handle, &patched, alloc, out);
@@ -319,6 +357,7 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
     sc->extent = info->imageExtent;
     sc->present_mode = info->presentMode;
     sc->min_image_count = info->minImageCount;
+    sc->async = async;
 
     if (blocker == NULL) {
         sc->gen_enabled = true;
@@ -338,10 +377,10 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
     pthread_mutex_unlock(&dev->lock);
 
     AFMF_INFO("swapchain %p created: %ux%u, format %d, present mode %d, %u images (app asked %u), "
-              "generation %s",
+              "generation %s%s",
               (void *)sc->handle, sc->extent.width, sc->extent.height, (int)sc->format,
               (int)sc->present_mode, sc->image_count, sc->min_image_count,
-              sc->gen_enabled ? "on" : "off");
+              sc->gen_enabled ? "on" : "off", sc->async ? " (layer queue)" : "");
     return VK_SUCCESS;
 }
 
@@ -523,6 +562,12 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     const struct afmf_device_fns *f = &dev->fns;
     uint32_t i = info->pImageIndices[0];
 
+    /* With a queue of its own the layer records for that family and presents from it; the
+     * application's queue is never waited on. */
+    VkQueue work_queue = sc->async ? dev->async_queue : queue;
+    if (sc->async)
+        family = dev->async_family;
+
     if (!ensure_pool(dev, sc, family) || i >= sc->image_count ||
         info->waitSemaphoreCount > AFMF_MAX_APP_WAITS) {
         gen_disable(sc, "cannot generate on this present path");
@@ -576,7 +621,11 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
             .signalSemaphoreCount = generate ? 2u : 1u,
             .pSignalSemaphores = signals,
         };
-        res = f->queue_submit(queue, 1, &submit, slot->fence);
+        if (sc->async)
+            pthread_mutex_lock(&dev->async_lock);
+        res = f->queue_submit(work_queue, 1, &submit, slot->fence);
+        if (sc->async && res != VK_SUCCESS)
+            pthread_mutex_unlock(&dev->async_lock);
     }
     if (res != VK_SUCCESS) {
         /* The application's semaphores were not consumed, so its own present still works. The
@@ -603,7 +652,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
             .pSwapchains = &sc->handle,
             .pImageIndices = &j,
         };
-        VkResult presented = f->queue_present(queue, &companion);
+        VkResult presented = f->queue_present(work_queue, &companion);
         if (presented < 0)
             AFMF_DEBUG("swapchain %p: generated present returned %d", (void *)sc->handle,
                        (int)presented);
@@ -615,7 +664,10 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     VkPresentInfoKHR real = *info;
     real.waitSemaphoreCount = 1;
     real.pWaitSemaphores = &sc->sem_real[i];
-    return f->queue_present(queue, &real);
+    res = f->queue_present(work_queue, &real);
+    if (sc->async)
+        pthread_mutex_unlock(&dev->async_lock);
+    return res;
 }
 
 VkResult afmf_swapchain_present(struct afmf_device *dev, VkQueue queue, const VkPresentInfoKHR *info)

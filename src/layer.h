@@ -33,6 +33,7 @@ struct afmf_device_fns {
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier;
     PFN_vkCmdCopyImage cmd_copy_image;
     PFN_vkQueueSubmit queue_submit;
+    PFN_vkQueueWaitIdle queue_wait_idle;
 
     PFN_vkCreateShaderModule create_shader_module;
     PFN_vkDestroyShaderModule destroy_shader_module;
@@ -78,6 +79,7 @@ struct afmf_device_fns {
 /* Instance-level entry points resolved once per device for its physical device. */
 struct afmf_instance_fns {
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR get_surface_capabilities;
+    PFN_vkGetPhysicalDeviceSurfaceSupportKHR get_surface_support;
     PFN_vkGetPhysicalDeviceFormatProperties get_format_properties;
 };
 
@@ -106,6 +108,17 @@ struct afmf_device {
     VkPhysicalDeviceLimits limits;
     VkQueueFamilyProperties *queue_families;
     uint32_t queue_family_count;
+
+    /* The layer's own compute queue, requested on top of the application's at vkCreateDevice so
+     * frame generation overlaps the application's rendering instead of queueing behind it.
+     * VK_NULL_HANDLE when no family had a spare queue; the layer then works on the presenting
+     * queue. `app_families` lists every family the application created queues in, for CONCURRENT
+     * swapchains shared with `async_family`. */
+    VkQueue async_queue;
+    uint32_t async_family;
+    pthread_mutex_t async_lock; /* the application may present from several threads */
+    uint32_t *app_families;
+    uint32_t app_family_count;
     struct afmf_framegen_pipelines *framegen_pipelines; /* created on first use, freed with the device */
 
     pthread_mutex_t lock; /* guards `queues`, `swapchains` and the per-swapchain counters */

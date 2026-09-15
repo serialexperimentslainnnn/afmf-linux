@@ -1,0 +1,136 @@
+# On a version tag: build the tarball and the distribution packages, sign every asset with the
+# release key, attest provenance, and draft the GitHub release. Publishing the draft is a click
+# by the maintainer after checking it (docs/PUBLISHING.md).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  tarball:
+    name: tarball
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build gcc libvulkan-dev glslang-tools spirv-tools
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          packaging/check-versions.sh "${GITHUB_REF_NAME#v}"
+      - name: Assemble the tarball
+        run: packaging/build-package.sh tarball
+      - name: Smoke-test install.sh
+        run: |
+          tar xf packaging/out/afmf-linux-*-x86_64.tar.xz -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP"/afmf-linux-*/install.sh
+          grep -q "$HOME/.local/lib/afmf-linux/libafmf-linux.so" "$HOME/.local/share/vulkan/implicit_layer.d/afmf-linux.json"
+          "$RUNNER_TEMP"/afmf-linux-*/install.sh --uninstall
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tarball
+          path: packaging/out/*
+
+  packages:
+    name: package (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: rpm-fedora-44
+            image: fedora@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80 # fedora:44
+            kind: rpm
+          - name: deb-debian-trixie
+            image: debian@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1 # debian:trixie
+            kind: deb
+          - name: deb-ubuntu-24.04
+            image: ubuntu@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 # ubuntu:24.04
+            kind: deb
+          - name: arch
+            image: archlinux@sha256:70d777aaeb45befc04150df137c4d7c1b5042be442b4c904c38c6f6880bb7844 # archlinux:base-devel
+            kind: arch
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the package
+        run: packaging/build-package.sh ${{ matrix.kind }}
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-${{ matrix.name }}
+          path: packaging/out/*
+
+  publish:
+    name: sign, attest and draft the release
+    needs: [tarball, packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download every asset
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Import the release key
+        env:
+          RELEASE_GPG_KEY: ${{ secrets.RELEASE_GPG_KEY }}
+        run: printf '%s' "$RELEASE_GPG_KEY" | gpg --batch --import
+      - name: Sign every asset (detached, ASCII) and add checksums
+        env:
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          cd assets
+          for f in *; do
+            case "$f" in *.asc|*.sha256) continue ;; esac
+            printf '%s' "$RELEASE_GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
+              --passphrase-fd 0 --armor --detach-sign --output "$f.asc" "$f"
+            sha256sum "$f" > "$f.sha256"
+          done
+          ls -l
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            assets/*.tar.xz
+            assets/*.rpm
+            assets/*.deb
+            assets/*.pkg.tar.zst
+      - name: Release notes from the changelog
+        run: packaging/changelog-section.sh "${GITHUB_REF_NAME#v}" > notes.md
+      - name: Draft the release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          draft: true
+          name: afmf-linux ${{ github.ref_name }}
+          body_path: notes.md
+          files: assets/*

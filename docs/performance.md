@@ -51,7 +51,7 @@ images, which can cost the game more than the 33 &micro;s copy it saves).
 | Game | Base (Linux, `DISABLE_AFMF=1`) | With afmf-linux | Notes |
 |---|---|---|---|
 | Monster Hunter Wilds, Native AA, max, vkd3d-proton | 120 fps | 250 moving / 271 still | 26,380 of 26,381 presents got a companion; hook 76-91 &micro;s; hold 3.7-4.3 ms |
-| Cyberpunk 2077, RT Ultra, FSR 4 Quality, game FG on, vkd3d-proton | ~100-125 fps | 180-250 | `RADV_PERFTEST=rtcps` raised the base; the gap to Windows is RADV's ray tracing, not the layer |
+| Cyberpunk 2077, RT Ultra, FSR 4 Quality, game FG on (needed), vkd3d-proton | ~100-125 fps | 180-250 | `RADV_PERFTEST=rtcps` raised the base; the gap to Windows is RADV's ray tracing, not the layer |
 | Cyberpunk 2077, same settings, **RX 7800 XT (RDNA3)**, FSR 4 in FP16 | ~60-110 fps | ~120-220 | 15,330 of 15,332 generated; hook 60-90 &micro;s; hold 4.6-7.6 ms. GPU cost 1,245 &micro;s per frame (search 700, ingest copy 148, interpolate 120, output copy 99): about 11 % of the GPU at 90 fps, against 5 % on the 9070 XT |
 
 ## RDNA3 (RX 7800 XT)

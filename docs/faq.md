@@ -10,8 +10,8 @@ faq:
     a: Yes. DXVK and vkd3d-proton present through Vulkan, which is where the layer sits.
   - q: Does it need an AMD GPU?
     a: No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image atomics. Tuned on RDNA4 with RADV; other GPUs are untested.
-  - q: Does it stack with the game's own frame generation?
-    a: Yes, it doubles whatever the game presents. Turn the game's frame generation off for a fair comparison.
+  - q: Does it work with the game's own frame generation (FSR 3/4 FG)?
+    a: Yes, and keep it on. The layer doubles whatever the game presents; in Cyberpunk 2077 under vkd3d-proton it only produced companions with the game's frame generation enabled. Leave the in-game setting as you would on Windows with AFMF.
   - q: Can I use it together with lsfg-vk?
     a: No. Two frame generation layers fight over the same presents, and with the lsfg-vk implicit layer installed Vulkan presentation on our RDNA3 test system hung even with afmf-linux disabled. Uninstall lsfg-vk or set DISABLE_LSFGVK=1.
   - q: Does it work on RDNA3?

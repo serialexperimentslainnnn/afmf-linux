@@ -10,7 +10,7 @@ faq:
   - q: Does it work with Proton and DirectX games?
     a: Yes. DXVK and vkd3d-proton present through Vulkan, which is where the layer sits. It has been measured with DirectX 12 titles under Proton.
   - q: Does it need an AMD GPU?
-    a: No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image atomics. Tuned on RDNA4 and verified on RDNA3, both with RADV; RDNA2, Intel and NVIDIA are untested.
+    a: No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image atomics. Tuned on RDNA4 and verified on RDNA3, both with RADV; a user reports it working on an NVIDIA GTX 1050 Ti. RDNA2 and Intel are untested.
   - q: Is it a kernel module or a Mesa patch?
     a: Neither. It is a Vulkan implicit layer, installed like MangoHud, enabled per game with AFMF_ENABLE=1.
 ---
@@ -62,8 +62,10 @@ the [install guide]({{ '/install/' | relative_url }}) covers every route, includ
 ## Tested hardware
 
 **AMD Radeon RX 9070 XT (RDNA4)** and **RX 7800 XT (RDNA3)**, Mesa 26.1.8 RADV, KDE Plasma
-Wayland, 3440&times;1440 at 165 Hz, with Monster Hunter Wilds and Cyberpunk 2077 under
-vkd3d-proton. Other GPUs and drivers: untested, reports welcome.
+Wayland, 3440&times;1440 at 165 Hz, with five games under vkd3d-proton, DXVK and native Vulkan.
+Users have reported it working on an **NVIDIA GTX 1050 Ti** with The Witcher 3 (DXVK). Every case,
+ours and theirs, with its result: [tested hardware and games]({{ '/tested/' | relative_url }}).
+Other GPUs and compositors: reports welcome.
 
 ## In games
 

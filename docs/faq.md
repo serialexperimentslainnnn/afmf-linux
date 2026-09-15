@@ -9,7 +9,7 @@ faq:
   - q: Does it work with Proton and DirectX games?
     a: Yes. DXVK and vkd3d-proton present through Vulkan, which is where the layer sits.
   - q: Does it need an AMD GPU?
-    a: No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image atomics. Tuned on RDNA4 and verified on RDNA3, both with RADV; RDNA2, Intel and NVIDIA are untested.
+    a: No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image atomics. Tuned on RDNA4 and verified on RDNA3, both with RADV; a user reports it working on an NVIDIA GTX 1050 Ti. RDNA2 and Intel are untested.
   - q: Does it work with the game's own frame generation (FSR 3/4 FG)?
     a: Yes, and keep it on. The layer doubles whatever the game presents; in Cyberpunk 2077 under vkd3d-proton it only produced companions with the game's frame generation enabled. Leave the in-game setting as you would on Windows with AFMF.
   - q: Can I use it together with lsfg-vk or OptiScaler?
@@ -34,11 +34,11 @@ faq:
 {{ item.a }}
 {% endfor %}
 
-## Which games has it been tried with?
+## Which games and GPUs has it been tried with?
 
-Monster Hunter Wilds and Cyberpunk 2077, both DirectX 12 under vkd3d-proton, on an RX 9070 XT.
-Numbers on the [performance]({{ '/performance/' | relative_url }}) page. Reports from other games,
-GPUs and compositors are welcome as issues; the template asks for the log.
+The [tested hardware and games]({{ '/tested/' | relative_url }}) page lists every case, ours and
+users', with the result. Reports from other games, GPUs and compositors are welcome as issues; the
+template asks for the log.
 
 ## What does the log's "no free image" mean?
 

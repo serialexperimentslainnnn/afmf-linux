@@ -38,8 +38,10 @@ screen with 76-91 us of host time per frame; in Cyberpunk 2077 with ray tracing 
 base. Every frame gets a companion (26,380 of 26,381 in a session). Also verified on an RX 7800 XT
 (RDNA3): same results in the tests and in Cyberpunk 2077 (15,330 of 15,332 generated), at about
 three times the GPU cost per frame (1.2 ms at 3440x1440), so the gain is smaller when the game
-already saturates the GPU. Other GPUs, drivers and compositors are untested: reports welcome, the
-bug template asks for what is needed.
+already saturates the GPU. Users have reported it working on an NVIDIA GTX 1050 Ti (The Witcher 3,
+DXVK). Every case with its result, ours and users', is on the
+[tested hardware and games](https://afmf-linux.digitalexperiments.dev/tested/) page; reports from
+other GPUs, drivers and compositors are welcome, the bug template asks for what is needed.
 
 **Do not stack it with another frame generation layer.** Two layers generating frames on the same
 swapchain fight over the same presents. In particular, with the **lsfg-vk** implicit layer
@@ -182,8 +184,8 @@ thing AMD's implementation does. `AFMF_PACING=0` removes the hold, at the cost o
 through Vulkan, which is where the layer sits. It has been measured with vkd3d-proton titles.
 
 **Does it need an AMD GPU?** No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image
-atomics; the tuning was done on RDNA4 with RADV, and RDNA3 is verified (RX 7800 XT). RDNA2, Intel
-and NVIDIA are untested.
+atomics; the tuning was done on RDNA4 with RADV, and RDNA3 is verified (RX 7800 XT). A user reports
+it working on an NVIDIA GTX 1050 Ti (The Witcher 3, DXVK). RDNA2 and Intel are untested.
 
 **Does it work with the game's own frame generation (FSR 3/4 FG, DLSS FG) or with lsfg-vk?** With
 the game's own, yes, and in Cyberpunk 2077 it needs it on: the layer doubles whatever the game

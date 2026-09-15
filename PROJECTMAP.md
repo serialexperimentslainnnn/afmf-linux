@@ -44,8 +44,10 @@ has no interpolation variant fall back to repeating the previous frame.
 - `README.md` — public front page (search-friendly headline, status, FAQ, configuration table).
   Keep its table, `docs/configuration.md` and this map's in step.
 - `docs/` — GitHub Pages site (Jekyll, GitHub's plugin allowlist only, no theme, no JS):
-  `index/install/configuration/performance/faq.md`, `_layouts/default.html`,
-  `_includes/structured-data.html` (JSON-LD), `assets/`, `PUBLISHING.md` (owner's checklist).
+  `index/install/configuration/performance/screenshots/tested/faq.md`, `_layouts/default.html`,
+  `_includes/structured-data.html` (JSON-LD), `_includes/shot.html` (capture linked to its
+  3440-wide file), `assets/`, `PUBLISHING.md` (owner's checklist). `tested.md` is the register of
+  every case run, maintainer's and users' (add each user report there, with its source).
 - `packaging/` — `build-package.sh tarball|rpm|deb|arch`, `install.sh` (tarball, user install),
   `rpm/afmf-linux.spec`, `debian/`, `arch/PKGBUILD` + `.SRCINFO`, `check-versions.sh`,
   `changelog-section.sh`, `release-key.sh` (creates/certifies/uploads the release key) and

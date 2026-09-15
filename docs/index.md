@@ -5,8 +5,8 @@ permalink: /
 faq:
   - q: Is afmf-linux really AMD Fluid Motion Frames?
     a: It is the same idea built the same way, driver-level frame generation from the colour buffer at present time using AMD's FidelityFX Optical Flow for the motion and an interpolation pass, applied to any game. It is not AMD's code for the interpolation and it is not affiliated with AMD.
-  - q: How much latency does it add?
-    a: Half a frame time, the same as AFMF. At 120 real fps that is about 4 ms. AFMF_PACING=0 removes the hold at the cost of an uneven cadence.
+  - q: Does it add latency?
+    a: Not noticeably, as with AFMF on Windows. The pacing holds the real frame back by half a frame time so the generated one lands in between, the same thing AMD's implementation does. AFMF_PACING=0 removes the hold at the cost of an uneven cadence.
   - q: Does it work with Proton and DirectX games?
     a: Yes. DXVK and vkd3d-proton present through Vulkan, which is where the layer sits. It has been measured with DirectX 12 titles under Proton.
   - q: Does it need an AMD GPU?
@@ -29,7 +29,7 @@ Any game, Proton or native. No kernel module, no driver patch.</p>
   <div><strong>2&times;</strong><span>frames on screen: one generated for every real frame</span></div>
   <div><strong>0.43 ms</strong><span>GPU time per frame at 3440&times;1440 on an RX 9070 XT, off the game's queue</span></div>
   <div><strong>~80 &micro;s</strong><span>of the game's thread per frame; the rest runs on the layer's own thread</span></div>
-  <div><strong>4 ms</strong><span>added latency at 120 fps: the half frame AMD's AFMF also pays</span></div>
+  <div><strong>1:1</strong><span>pacing: each generated frame lands halfway between two real ones, as with AMD's AFMF</span></div>
 </div>
 
 ## What it does

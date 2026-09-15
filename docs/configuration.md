@@ -19,7 +19,7 @@ names mirror the settings AMD exposes for AFMF on Windows where such a setting e
 | `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest the layer waits for the companion's image to be released before presenting the real frame alone. The image is requested a frame ahead, so the default never stalls the game |
 | `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue and presents inline (diagnosis) |
-| `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: no added latency, uneven cadence |
+| `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: uneven cadence, the compositor may drop generated frames |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_PROFILE` | `0` | `1` logs GPU time per stage and host time per present every 300 frames and at teardown |
 | `AFMF_DUMP_DIR` | unset | Writes the first generated frames as PPM files into that directory (8-bit formats only) |
@@ -30,7 +30,7 @@ names mirror the settings AMD exposes for AFMF on Windows where such a setting e
 
 **AMD "high search, blend"**: `AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=blend`.
 
-**No added latency** (uneven cadence, the compositor may drop generated frames above the refresh
+**Without pacing** (uneven cadence, the compositor may drop generated frames above the refresh
 rate): add `AFMF_PACING=0`.
 
 **Diagnosis**: add `AFMF_LOG=2 AFMF_PROFILE=1` and `2>afmf.log` after `%command%`; attach the file

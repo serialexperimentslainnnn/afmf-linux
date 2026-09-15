@@ -16,7 +16,7 @@ driver.
 AMD's AFMF is not a hardware feature: on Windows it is compute-shader work the driver inserts at
 present time. This layer does the same thing on Linux, with AMD's own **FidelityFX Optical Flow**
 shaders for the motion estimation, a small interpolation shader of its own, and the same
-half-frame pacing (4-5 ms of added latency at 120 fps) AMD documents for AFMF.
+half-frame pacing AMD uses for AFMF, so the generated frames land evenly between the real ones.
 
 **Documentation, install guide, configuration and measured numbers:**
 <https://afmf-linux.digitalexperiments.dev/>
@@ -55,8 +55,8 @@ not. Leave the in-game setting as it is on Windows with AFMF.
    between the previous frame and the new one, and synthesises the frame in between by warping both
    along half the estimated motion.
 3. A presentation thread of the layer presents the generated frame at once and the real frame
-   half a frame later, so the two land evenly spaced on screen (this is the half-frame of added
-   latency AMD's implementation also has; `AFMF_PACING=0` turns it off). The GPU work runs on a
+   half a frame later, so the two land evenly spaced on screen, the same pacing AMD's AFMF uses
+   (`AFMF_PACING=0` turns it off). The GPU work runs on a
    compute queue of the layer's own (or, when the application took every compute queue, as
    vkd3d-proton does, on the application's last one, serialised with its use), so the graphics
    queue never waits for it, and the application's thread returns as soon as the work is
@@ -136,7 +136,7 @@ Windows (search mode, performance mode, fast motion response) where such a setti
 | `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest the layer waits for the companion's image to be released before presenting the real frame alone. The image is requested a frame ahead, so the default never stalls the game |
 | `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue and presents inline (diagnosis) |
-| `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: no added latency, uneven cadence |
+| `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: uneven cadence, the compositor may drop generated frames |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_PROFILE` | `0` | `1` logs GPU time per stage every 300 frames and at teardown |
 | `AFMF_DUMP_DIR` | unset | Writes the first generated frames as PPM files into that directory (8-bit formats only) |
@@ -152,8 +152,6 @@ AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=blend <game>
 - Colour only: no depth, no motion vectors, no HUD detection. In the games measured so far it
   looks smooth; where the flow has nothing to go on (overlays over fast motion, very thin objects,
   scene cuts) the pixel falls back to the previous frame or a blend instead of guessing.
-- The presented frame rate doubles, the input latency gets worse by half a frame (the real frame
-  is held back so the generated one lands in between), as with AMD's implementation.
 - Applications on Vulkan 1.0 get no interpolation (the block search needs subgroup operations);
   they run unmodified except for the extra swapchain images.
 - 32-bit applications need a 32-bit build of the layer; none is provided.
@@ -170,8 +168,9 @@ frame generation from the colour buffer, using AMD's FidelityFX Optical Flow for
 custom interpolation pass, applied at present time to any game. It is not AMD's code for the
 interpolation and it is not affiliated with AMD.
 
-**How much latency does it add?** Half a frame time, the same as AFMF: at 120 real fps about 4 ms.
-`AFMF_PACING=0` removes the hold at the cost of an uneven cadence.
+**Does it add latency?** In play it is not noticeable, as with AFMF on Windows: the pacing holds
+the real frame back by half a frame time so the generated one lands in between, which is the same
+thing AMD's implementation does. `AFMF_PACING=0` removes the hold, at the cost of an uneven cadence.
 
 **Does it work with Proton / DirectX 11 / DirectX 12 games?** Yes: DXVK and vkd3d-proton present
 through Vulkan, which is where the layer sits. It has been measured with vkd3d-proton titles.

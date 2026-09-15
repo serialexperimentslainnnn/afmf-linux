@@ -4,8 +4,8 @@ description: Answers about afmf-linux, the open AMD Fluid Motion Frames for Linu
 faq:
   - q: Is afmf-linux really AMD Fluid Motion Frames?
     a: It is the same idea built the same way, driver-level frame generation from the colour buffer at present time using AMD's FidelityFX Optical Flow for the motion and an interpolation pass, applied to any game. It is not AMD's code for the interpolation and it is not affiliated with AMD.
-  - q: How much latency does it add?
-    a: Half a frame time, the same as AFMF. At 120 real fps that is about 4 ms. AFMF_PACING=0 removes the hold at the cost of an uneven cadence.
+  - q: Does it add latency?
+    a: Not noticeably, as with AFMF on Windows. The pacing holds the real frame back by half a frame time so the generated one lands in between, the same thing AMD's implementation does. AFMF_PACING=0 removes the hold at the cost of an uneven cadence.
   - q: Does it work with Proton and DirectX games?
     a: Yes. DXVK and vkd3d-proton present through Vulkan, which is where the layer sits.
   - q: Does it need an AMD GPU?

@@ -72,6 +72,8 @@ struct ctx {
     bool present_modes; /* AFMF_TEST_PRESENT_MODES=1: VK_EXT_swapchain_maintenance1 mode list and per-present mode, FIFO */
 };
 
+static void destroy(struct ctx *ctx);
+
 static int wanted_present_id(void)
 {
     const char *v = getenv("AFMF_TEST_PRESENT_ID");
@@ -165,6 +167,7 @@ static bool create_instance(struct ctx *ctx, bool with_validation)
     if (wanted_present_modes()) {
         if (!instance_extension_available(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME)) {
             (void)fprintf(stderr, "skipped: " VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME " unavailable\n");
+            destroy(ctx); /* LeakSanitizer turns a skip with live objects into a failure */
             exit(EXIT_SKIP);
         }
         extensions[extension_count++] = VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
@@ -273,6 +276,7 @@ static bool create_device_and_swapchain(struct ctx *ctx)
     if (ctx->present_modes) {
         if (!device_extension_available(ctx->physical_device, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
             (void)fprintf(stderr, "skipped: " VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME " unavailable\n");
+            destroy(ctx); /* LeakSanitizer turns a skip with live objects into a failure */
             exit(EXIT_SKIP);
         }
         extensions[extension_count++] = VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
@@ -313,6 +317,7 @@ static bool create_device_and_swapchain(struct ctx *ctx)
 #endif
         if (!found) {
             (void)fprintf(stderr, "skipped: %s unavailable on this surface\n", ext);
+            destroy(ctx); /* LeakSanitizer turns a skip with live objects into a failure */
             exit(EXIT_SKIP);
         }
         extensions[extension_count++] = ext;

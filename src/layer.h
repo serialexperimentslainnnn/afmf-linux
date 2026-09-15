@@ -37,6 +37,7 @@ struct afmf_device_fns {
     PFN_vkQueueSubmit2KHR queue_submit2_khr;
     PFN_vkQueueBindSparse queue_bind_sparse;
     PFN_vkQueueWaitIdle queue_wait_idle;
+    PFN_vkDeviceWaitIdle device_wait_idle;
 
     PFN_vkCreateShaderModule create_shader_module;
     PFN_vkDestroyShaderModule destroy_shader_module;
@@ -76,6 +77,7 @@ struct afmf_device_fns {
     PFN_vkDestroySwapchainKHR destroy_swapchain;
     PFN_vkGetSwapchainImagesKHR get_swapchain_images;
     PFN_vkAcquireNextImageKHR acquire_next_image;
+    PFN_vkAcquireNextImage2KHR acquire_next_image2;
     PFN_vkQueuePresentKHR queue_present;
 };
 

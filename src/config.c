@@ -69,6 +69,9 @@ static void init(void)
     long performance = AFMF_PERFORMANCE_AUTO;
     long profile = 0;
     long async = 1;
+    /* Pacing holds the real frame back by half a frame time so the generated one lands halfway,
+     * as the driver-level implementation does (its documented 4-5 ms of added latency at 120 fps). */
+    long pacing = 1;
 
     static const struct choice search_modes[] = {{"auto", AFMF_SEARCH_AUTO},
                                                 {"standard", AFMF_SEARCH_STANDARD},
@@ -87,6 +90,7 @@ static void init(void)
     ok = read_choice("AFMF_FAST_MOTION_RESPONSE", responses, 2, &fast_motion) && ok;
     ok = read_bounded("AFMF_PROFILE", 0, 1, &profile) && ok;
     ok = read_bounded("AFMF_ASYNC", 0, 1, &async) && ok;
+    ok = read_bounded("AFMF_PACING", 0, 1, &pacing) && ok;
     ok = read_choice("AFMF_PERFORMANCE_MODE", performance_modes, 3, &performance) && ok;
 
     g_config.log_level = (int)log_level;
@@ -101,6 +105,7 @@ static void init(void)
     g_config.dump_dir = dump_dir != NULL && *dump_dir != '\0' ? dump_dir : NULL;
     g_config.profile = profile != 0 || log_level >= AFMF_LOG_DEBUG;
     g_config.async = async != 0;
+    g_config.pacing = pacing != 0;
     g_config.invalid = !ok;
 }
 

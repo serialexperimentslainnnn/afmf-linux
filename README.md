@@ -16,10 +16,13 @@ shaders for the motion estimation and a small interpolation shader of its own.
    FidelityFX Optical Flow (luma pyramid, scene-change detector, coarse-to-fine 8x8 block search)
    between the previous frame and the new one, and synthesises the frame in between by warping both
    along half the estimated motion.
-3. The generated frame is presented first, the real frame right after it. All of this runs on a
+3. A presentation thread of the layer presents the generated frame at once and the real frame
+   half a frame later, so the two land evenly spaced on screen (this is the half-frame of added
+   latency AMD's implementation also has; `AFMF_PACING=0` turns it off). The GPU work runs on a
    compute queue of the layer's own (or, when the application took every compute queue, as
    vkd3d-proton does, on the application's last one, serialised with its use), so the graphics
-   queue never waits for it.
+   queue never waits for it, and the application's thread returns as soon as the work is
+   submitted.
 
 Where the flow cannot be trusted (scene cut, motion beyond 64 px) the pixel falls back to the
 previous frame or to a blend, selectable with `AFMF_FAST_MOTION_RESPONSE`.
@@ -94,7 +97,8 @@ Windows (search mode, performance mode, fast motion response) where such a setti
 | `AFMF_FAST_MOTION_RESPONSE` | `repeat` | What to show where the flow is unreliable: `repeat` the previous frame, or `blend` both |
 | `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest the layer waits for the companion's image to be released before presenting the real frame alone. The image is requested a frame ahead, so the default never stalls the game |
-| `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue (diagnosis, or drivers without a spare compute queue) |
+| `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue and presents inline (diagnosis) |
+| `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: no added latency, uneven cadence |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_PROFILE` | `0` | `1` logs GPU time per stage every 300 frames and at teardown |
 | `AFMF_DUMP_DIR` | unset | Writes the first generated frames as PPM files into that directory (8-bit formats only) |
@@ -109,17 +113,16 @@ AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=blend <game>
 
 - Colour only: no depth, no motion vectors, no HUD detection. Overlays and fast-moving thin
   objects show the usual optical-flow artefacts.
-- The application's presented frame rate at least doubles, its input latency does not improve: the
-  generated frame is what the game already rendered, halfway.
+- The presented frame rate doubles, the input latency gets worse by half a frame (the real frame
+  is held back so the generated one lands in between), as with AMD's implementation.
 - Applications on Vulkan 1.0 get no interpolation (the block search needs subgroup operations);
   they run unmodified except for the extra swapchain images.
 - 32-bit applications need a 32-bit build of the layer; none is provided.
 - Swapchain formats with an interpolation variant: 8-bit RGBA/BGRA (UNORM and sRGB),
   A2B10G10R10, and RGBA16F. Others fall back to pass-through, logged at info level.
-- Frame pacing depends on the presentation mode: in FIFO the companion and the real frame take
-  consecutive refresh slots, and a game already running at the refresh rate gets no companions at
-  all (there is no free image to put them in); in mailbox or immediate mode the compositor may drop
-  the companion when the presented rate exceeds the refresh rate.
+- A game already running at the display's refresh rate in FIFO gets no companions at all (there
+  is no free image to put them in); in mailbox or immediate mode the compositor drops whatever
+  exceeds the refresh rate.
 
 ## Tests
 

@@ -137,6 +137,11 @@ install(FILES "${CMAKE_BINARY_DIR}/install/afmf-linux.json"
 
 enable_testing()
 
+# The loader dlcloses the driver at instance destruction; LeakSanitizer then reports the driver's
+# once-initialised allocations (reachable from its static data) as leaks with no symbols. Keeping
+# the libraries mapped makes the leak check mean something.
+set(AFMF_TEST_LOADER_ENV "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1")
+
 add_executable(afmf_headless tests/headless.c)
 target_link_libraries(afmf_headless PRIVATE Vulkan::Vulkan)
 target_compile_definitions(afmf_headless PRIVATE _POSIX_C_SOURCE=200809L)
@@ -149,7 +154,7 @@ target_compile_options(afmf_headless PRIVATE ${AFMF_WARNINGS})
 # apart, not milliseconds.
 add_test(NAME headless COMMAND afmf_headless)
 set_tests_properties(headless PROPERTIES
-    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf;AFMF_PERFORMANCE_MODE=quality;AFMF_ACQUIRE_TIMEOUT_US=16000"
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf;AFMF_PERFORMANCE_MODE=quality;AFMF_ACQUIRE_TIMEOUT_US=16000;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
     FAIL_REGULAR_EXPRESSION "validation error|^failed"
     SKIP_RETURN_CODE 77
@@ -157,7 +162,7 @@ set_tests_properties(headless PROPERTIES
 # Same check with the optical flow at half resolution (16-pixel blocks on screen).
 add_test(NAME headless_performance COMMAND afmf_headless)
 set_tests_properties(headless_performance PROPERTIES
-    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-performance;AFMF_PERFORMANCE_MODE=performance;AFMF_ACQUIRE_TIMEOUT_US=16000"
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-performance;AFMF_PERFORMANCE_MODE=performance;AFMF_ACQUIRE_TIMEOUT_US=16000;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
     FAIL_REGULAR_EXPRESSION "validation error|^failed"
     SKIP_RETURN_CODE 77
@@ -167,7 +172,7 @@ set_tests_properties(headless_performance PROPERTIES
 # serialising the application's submits on it, and still generate every frame.
 add_test(NAME headless_shared_queue COMMAND afmf_headless)
 set_tests_properties(headless_shared_queue PROPERTIES
-    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-shared;AFMF_TEST_ALL_QUEUES=1;AFMF_ACQUIRE_TIMEOUT_US=16000"
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-shared;AFMF_TEST_ALL_QUEUES=1;AFMF_ACQUIRE_TIMEOUT_US=16000;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
     FAIL_REGULAR_EXPRESSION "validation error|^failed|layer queue on family|no compute queue to use"
     SKIP_RETURN_CODE 77

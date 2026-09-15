@@ -20,7 +20,10 @@ has no interpolation variant fall back to repeating the previous frame.
 | Which swapchain formats interpolate and how | `src/framegen.c` `describe_format` | R8G8B8A8, B8G8R8A8 (+sRGB), A2B10G10R10, R16G16B16A16F |
 | FidelityFX sources (never edited) | `shaders/fidelityfx/` | `NOTICE.md` has tag, commit and mapping |
 | What is recorded per frame around framegen | `src/swapchain.c` `record_frame` | Image i arrives PRESENT_SRC and leaves PRESENT_SRC |
-| The present flow: take the spare, submit, two presents, refill the spare | `src/swapchain.c` `present_generated`, `spare_take`, `spare_refill` | On `dev->async_queue` when the swapchain is `sc->async`; never waits for the presentation engine (`AFMF_ACQUIRE_TIMEOUT_US=0`) |
+| The present flow: take the spare, record, submit, hand off | `src/swapchain.c` `present_generated`, `spare_take` | Returns after the submit; the results of earlier presents come back deferred |
+| Presentation thread: two presents, pacing hold, spare refill | `src/swapchain.c` `presenter_main`, `present_one`, `job_from_chain` | One per swapchain, only when `sc->async`; the real frame waits `hold_ns` = half the EMA frame time (`AFMF_PACING`) |
+| The application's acquire, serialised with the thread | `src/swapchain.c` `afmf_swapchain_acquire` | 1 ms slices under `wsi_lock` |
+| vkDeviceWaitIdle with threads in flight | `src/layer.c` `afmf_DeviceWaitIdle`, `afmf_swapchain_drain_all` | Drains every presenter, then idles under `async_lock` |
 | Host time the game's thread spends in the layer | `src/swapchain.c` `update_cadence` | Every 300 presents with `AFMF_PROFILE=1`: real fps, hook/fence/acquire/each present/refill us |
 | Which window system a surface is (Wayland, X11, headless) | `src/layer.c` `surface_hooks` | Logged at INFO; generic signature, no platform headers |
 | The layer's own compute queue (family choice, extra queue request) | `src/layer.c` `choose_async_family`, `queues_with_extra` | Stamped with `pfnSetDeviceLoaderData` like command buffers |
@@ -34,7 +37,7 @@ has no interpolation variant fall back to repeating the previous frame.
 | Layer manifest (name, enable/disable env vars) | `layer/afmf-linux.json.in` | Generated twice: build tree path and install path |
 | Build flags, shader compilation, sanitizers, tests, install | `CMakeLists.txt` | `afmf_glsl()`, `AFMF_WARNINGS`, `AFMF_SANITIZE`, `add_test(headless)`, `install()` |
 | SPIR-V embedding | `cmake/embed_spirv.cmake` | `.spv` -> `uint32_t` arrays in `build/shaders/afmf_spirv.h` |
-| Headless integration test (validation, generation count, golden check) | `tests/headless.c` | Synthetic sliding square; reads the layer's PPM dumps; `AFMF_TEST_ALL_QUEUES=1` takes every compute queue like vkd3d-proton (ctest `headless_shared_queue`) |
+| Headless integration test (validation, generation count, golden check) | `tests/headless.c` | Synthetic sliding square; reads the layer's PPM dumps; `AFMF_TEST_ALL_QUEUES=1` takes every compute queue like vkd3d-proton (ctest `headless_shared_queue`); `AFMF_TEST_FRAMES`, `AFMF_TEST_FRAME_MS` pace it like a game to see the pacing hold |
 | Real-window smoke test | `tests/smoke.sh` | vkcube, implicit enable via `AFMF_ENABLE=1`, negative control |
 
 ## Structure
@@ -67,7 +70,8 @@ has no interpolation variant fall back to repeating the previous frame.
 | `AFMF_DUMP_DIR` | unset | Writes the first 4 generated frames as `afmf_generated_<n>.ppm` (8-bit formats) |
 | `AFMF_PROFILE` | `0` | `1` (or `AFMF_LOG=3`) logs GPU time per stage every 300 frames and at teardown |
 | `AFMF_PERFORMANCE_MODE` | `auto` | `quality` = flow at display resolution, `performance` = at half (16 px blocks); `auto` = performance from 2560x1440 up |
-| `AFMF_ASYNC` | `1` | `0` keeps the work on the application's queue (diagnosis, fallback) |
+| `AFMF_ASYNC` | `1` | `0` keeps the work on the application's queue and presents inline (diagnosis, fallback) |
+| `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one (no hold) |
 
 ## Performance register
 Method: `AFMF_TEST_EXTENT=3440x1440 AFMF_PROFILE=1 ./build/afmf_headless`, GPU timestamps per
@@ -79,6 +83,7 @@ shaders, the driver or the resolution change; review this table with every optim
 | 2026-09-15 | `631b0c0` + profiler | 1222 us | block search 85 % (1038 us); everything else < 40 us each | Baseline; all on the application's queue |
 | 2026-09-15 | async queue | 1222 us (unchanged) | same | Work and presents moved to the layer's compute queue (RADV family 1); headless host critical path 5.58 -> 4.82 ms median of 3 (host is upload-bound, not a game proxy) |
 | 2026-09-15 | performance mode | 493 us on the app queue (quality 1224) | search 331 us (67 %) | Flow at half resolution; golden test identical. On the compute queue the same work reads 1395 us (quality 4329) of wall time: the ACE shares the GPU with graphics and the idle host lowers clocks; the host's own frame is still shorter with async (4.24 vs 4.70 ms) |
+| 2026-09-15 | presentation thread + pacing | MH Wilds (Wayland, mailbox forced): hook 546 us of which the two presents 444; vkcube after: hook 21 us (record 4, submit 9), presents on the thread | game thread: fence, spare, record, submit only | Both presents, the refill and the half-frame hold run on a thread per swapchain. Headless at 6 ms frames: hold 3.44 ms, 399/400 generated, validation (thread safety included) and ASan clean. `record 471` in the ASan+validation line is instrumentation, not the layer |
 | 2026-09-15 | shared queue, in game | MH Wilds log with the shared queue: 18199/18200 generated, 0 no free image, hook 425-719 us of which the two presents 370-630 (vkcube on the same desktop: 16 us) | present path, FIFO (mode 2) | Timers now split companion / real present / refill, and surfaces log their platform, to tell XWayland from Wayland and blit swapchains from direct ones |
 | 2026-09-15 | shared compute queue | MH Wilds (vkd3d-proton) log: the layer had **never** had its own queue there, the game takes all 4 compute queues; 517 us of GPU work ran on the graphics queue in series with rendering, plus 340-590 us of host time in the two FIFO presents | now: the game's compute queue 3, shared under `async_lock` | Headless at 3440x1440 with all queues taken: 119/120 generated, validation clean, 602 us wall on the shared queue |
 | 2026-09-15 | spare image, no acquire wait | host: 5,900 -> 60 us per present in the hook (vkcube, FIFO 165 Hz); GPU unchanged | acquire wait was 5,100-5,900 us of it | The companion's image is acquired a frame ahead with timeout 0 and its release fence waited on the host at use time. In mailbox/immediate vkcube generates 995 of 996 with a 40 us hook; in FIFO at the refresh rate it generates nothing, which is right. Explains MH Wilds: base 120 real fps, 92 with the layer = 2.5 ms per frame lost, 0.43 of them GPU |
@@ -147,16 +152,25 @@ shaders, the driver or the resolution change; review this table with every optim
   A FIFO game already at the refresh rate gets no companions (no free image, by design); mailbox
   and immediate get nearly all. Headless surfaces signal the release asynchronously, which is why
   ctest sets `AFMF_ACQUIRE_TIMEOUT_US=16000`: it checks generation, not the never-stall policy.
+- **Lock order with the presentation thread**: `wsi_lock` (swapchain) before `async_lock`
+  (queue); `dev->lock` before `job_lock`; the thread never takes `dev->lock` (vkDeviceWaitIdle
+  drains it while holding `dev->lock`). Thread-side counters live under `job_lock`.
+- **What the thread can carry from the application's present chain**: `VkPresentIdKHR` (real frame
+  only, ids must increase), `VkSwapchainPresentModeInfoEXT` (both), `VkPresentRegionsKHR` (dropped,
+  a hint). Anything else (a present fence, display timing) makes that present inline, after a
+  drain, so order is kept. Present results are deferred to the next present call; OUT_OF_DATE also
+  reaches the application through its acquire.
+- **The application's acquire runs in 1 ms slices under `wsi_lock`**: holding the lock across a
+  blocking acquire would stall the thread whose presents free the images (deadlock in FIFO with
+  few images).
 - **`vkAcquireNextImageKHR` with a fence, not a semaphore, for the spare**: a binary semaphore
   cannot be re-acquired until the submit that waited on it has run, and the spare lives across
   slots; the fence is waited on the host (already signalled a frame later) and reset.
-- **Pacing is the display's, not ours**: in FIFO the companion and the real frame take consecutive
-  refresh slots, so the cadence is even only when the refresh rate is a multiple of the game's frame
-  rate (cap the game at half the refresh). In MAILBOX/IMMEDIATE the companion is presented
-  microseconds before the real frame, so whenever the presented rate exceeds the refresh rate the
-  compositor mostly drops the companion: the counter doubles, the eye sees the real frames. Half-
-  frame-time pacing (delay the real frame by half the measured frame time from a presentation
-  thread, the latency AMD's AFMF also pays) is the fix; not built yet.
+- **Pacing**: without the hold, the companion goes out microseconds before the real frame and in
+  MAILBOX/IMMEDIATE the compositor drops it whenever the presented rate exceeds the refresh rate
+  (the counter doubles, the eye sees the real frames). The hold (half the EMA frame time, clamped
+  0.5-20 ms, `AFMF_PACING`) is the half-frame of latency AMD documents (4-5 ms at 120 fps). A
+  FIFO game at the refresh rate still gets no companions: no free image.
 - **Not done on purpose, with the numbers**: writing the interpolator straight into the swapchain
   image (saves the 19 us output copy) needs `STORAGE` usage on the swapchain images, which can cost
   the *game's* rendering (compression) more than 19 us on a queue that is already off its critical

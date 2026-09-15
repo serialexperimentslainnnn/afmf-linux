@@ -4,6 +4,7 @@
 #include "framegen.h"
 #include "log.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -15,6 +16,29 @@
 #define AFMF_MAX_FAMILIES 8u
 /* Wait semaphores an application may attach to one present before the layer gives up on it. */
 #define AFMF_MAX_APP_WAITS 8u
+/* Presents queued for the presentation thread; bounded by the images in flight in practice. */
+#define AFMF_MAX_JOBS 16u
+/* The application's acquire is run in slices of this length under the swapchain lock, so the
+ * presentation thread is never held off for longer than one slice. */
+#define AFMF_ACQUIRE_SLICE_NS 1000000ull
+/* Pacing delay bounds for the real frame: half the frame time, clamped. */
+#define AFMF_PACING_MIN_NS 500000ull
+#define AFMF_PACING_MAX_NS 20000000ull
+
+/* One frame handed to the presentation thread: the generated image first, the real one after
+ * the pacing delay, each with what the application's pNext chain carried that survives being
+ * copied (present id, per-present mode). */
+struct afmf_present_job {
+    uint32_t real_image;
+    uint32_t companion_image;
+    bool generate;
+    struct timespec arrival;
+    uint64_t hold_ns;         /* how long after arrival the real frame goes out */
+    bool have_present_id;
+    uint64_t present_id;
+    bool have_present_mode;
+    VkPresentModeKHR present_mode;
+};
 
 /* One in-flight layer submission: its command buffer and the fence that says the slot can be
  * reused. */
@@ -64,7 +88,29 @@ struct afmf_swapchain {
     uint32_t frame_time_samples;
     /* Host time the application's present thread spends inside the layer, per interval: the
      * whole hook and the three places it can block (slot fence, companion acquire, presents). */
-    double hook_ms, fence_ms, acquire_ms, present_ms, present_real_ms, refill_ms;
+    double hook_ms, fence_ms, acquire_ms, record_ms, submit_ms;
+    double present_ms, present_real_ms, refill_ms, hold_ms;
+    double frame_ms_ema; /* smoothed time between the application's presents, for pacing */
+
+    /* Presentation thread. Under Proton each vkQueuePresentKHR measured 170-400 us of host time
+     * on the application's thread; both presents (and the spare refill) run here instead, and
+     * the real frame is held back half a frame so the generated one lands in between. Only used
+     * when the layer presents from its own queue (`async`): from the application's queue its
+     * thread would race the application's submits. */
+    struct afmf_device *dev;
+    pthread_t presenter;
+    bool presenter_running;
+    bool presenter_stop;
+    pthread_mutex_t job_lock;
+    pthread_cond_t job_cond;   /* new job, or stop */
+    pthread_cond_t drain_cond; /* the queue emptied */
+    struct afmf_present_job jobs[AFMF_MAX_JOBS];
+    uint32_t job_head, job_count;
+    VkResult deferred_result; /* worst result of presents done so far, returned by the next present call */
+    /* vkAcquireNextImageKHR and vkQueuePresentKHR both need external synchronisation on the
+     * swapchain: the application's acquires, the layer's spare acquires and the presentation
+     * thread's presents all take this. */
+    pthread_mutex_t wsi_lock;
 
     struct afmf_swapchain *next;
 };
@@ -228,9 +274,13 @@ static bool ensure_pool(struct afmf_device *dev, struct afmf_swapchain *sc, uint
     return true;
 }
 
+static void presenter_stop(struct afmf_swapchain *sc);
+static void presenter_drain(struct afmf_swapchain *sc);
+
 static void gen_teardown(struct afmf_device *dev, struct afmf_swapchain *sc)
 {
     const struct afmf_device_fns *f = &dev->fns;
+    presenter_stop(sc); /* drains what is queued: the swapchain is still alive here */
     if (sc->async) {
         /* The layer's queue may still be presenting from this swapchain. */
         pthread_mutex_lock(&dev->async_lock);
@@ -289,6 +339,7 @@ static void gen_teardown(struct afmf_device *dev, struct afmf_swapchain *sc)
 static void gen_disable(struct afmf_swapchain *sc, const char *why)
 {
     AFMF_WARN("swapchain %p: %s; pass-through from now on", (void *)sc->handle, why);
+    presenter_stop(sc);
     sc->gen_enabled = false;
 }
 
@@ -371,11 +422,21 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
     sc->handle = *out;
+    sc->dev = dev;
     sc->format = info->imageFormat;
     sc->extent = info->imageExtent;
     sc->present_mode = info->presentMode;
     sc->min_image_count = info->minImageCount;
     sc->async = async;
+    sc->deferred_result = VK_SUCCESS;
+    pthread_mutex_init(&sc->wsi_lock, NULL);
+    pthread_mutex_init(&sc->job_lock, NULL);
+    pthread_condattr_t monotonic;
+    pthread_condattr_init(&monotonic);
+    pthread_condattr_setclock(&monotonic, CLOCK_MONOTONIC);
+    pthread_cond_init(&sc->job_cond, &monotonic);
+    pthread_cond_init(&sc->drain_cond, NULL);
+    pthread_condattr_destroy(&monotonic);
 
     if (blocker == NULL) {
         sc->gen_enabled = true;
@@ -410,6 +471,10 @@ static void report_and_free(struct afmf_device *dev, struct afmf_swapchain *sc)
               sc->skipped_no_image + sc->skipped_no_history, sc->skipped_no_image,
               sc->skipped_no_history);
     gen_teardown(dev, sc);
+    pthread_cond_destroy(&sc->drain_cond);
+    pthread_cond_destroy(&sc->job_cond);
+    pthread_mutex_destroy(&sc->job_lock);
+    pthread_mutex_destroy(&sc->wsi_lock);
     free(sc);
 }
 
@@ -427,6 +492,14 @@ void afmf_swapchain_destroy(struct afmf_device *dev, VkSwapchainKHR swapchain,
             AFMF_WARN("destroying swapchain %p the layer never saw", (void *)swapchain);
     }
     dev->fns.destroy_swapchain(dev->handle, swapchain, alloc);
+}
+
+void afmf_swapchain_drain_all(struct afmf_device *dev)
+{
+    pthread_mutex_lock(&dev->lock);
+    for (struct afmf_swapchain *sc = dev->swapchains; sc != NULL; sc = sc->next)
+        presenter_drain(sc); /* the thread never needs dev->lock to finish a job */
+    pthread_mutex_unlock(&dev->lock);
 }
 
 void afmf_swapchain_forget_all(struct afmf_device *dev)
@@ -556,8 +629,13 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
      * pacing work, not a measurement of when the frame reached the display. */
     if (have_now) {
         if (sc->present_count > 0) {
-            sc->frame_time_ms_accum += elapsed_ms(&sc->last_present, &now);
+            double dt = elapsed_ms(&sc->last_present, &now);
+            sc->frame_time_ms_accum += dt;
             sc->frame_time_samples++;
+            /* Smoothed for pacing: quick enough to follow a scene change, steady enough not to
+             * jitter the hold with every frame. Ignores pauses longer than the pacing cap. */
+            if (dt < 2.0 * AFMF_PACING_MAX_NS / 1e6)
+                sc->frame_ms_ema = sc->frame_ms_ema == 0.0 ? dt : 0.9 * sc->frame_ms_ema + 0.1 * dt;
         }
         sc->last_present = now;
     }
@@ -570,21 +648,26 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
 #define STATS_LINE                                                                                \
     "swapchain %p: %" PRIu64 " presents, %" PRIu64 " generated, %" PRIu64 " no free image; "    \
     "%.2f ms between presents (%.0f real fps); in the layer %.0f us per present: slot fence "   \
-    "%.0f, acquire %.0f, present generated %.0f, present real %.0f, refill %.0f"
+    "%.0f, acquire %.0f, record %.0f, submit %.0f; presentation thread: present generated "   \
+    "%.0f, present real %.0f, refill %.0f, pacing hold %.2f ms"
 #define STATS_ARGS                                                                                \
     (void *)sc->handle, sc->present_count, sc->generated, sc->skipped_no_image, frame_ms,       \
         1e3 / frame_ms, 1e3 * sc->hook_ms / n, 1e3 * sc->fence_ms / n, 1e3 * sc->acquire_ms / n, \
-        1e3 * sc->present_ms / n, 1e3 * sc->present_real_ms / n, 1e3 * sc->refill_ms / n
+        1e3 * sc->record_ms / n, 1e3 * sc->submit_ms / n, 1e3 * sc->present_ms / n,             \
+        1e3 * sc->present_real_ms / n, 1e3 * sc->refill_ms / n, sc->hold_ms / n
+        pthread_mutex_lock(&sc->job_lock); /* the presentation thread's counters */
         if (afmf_config_get()->profile)
             AFMF_INFO(STATS_LINE, STATS_ARGS);
         else
             AFMF_DEBUG(STATS_LINE, STATS_ARGS);
 #undef STATS_LINE
 #undef STATS_ARGS
+        sc->present_ms = sc->present_real_ms = sc->refill_ms = 0.0;
+        pthread_mutex_unlock(&sc->job_lock);
         sc->frame_time_ms_accum = 0.0;
         sc->frame_time_samples = 0;
-        sc->hook_ms = sc->fence_ms = sc->acquire_ms = sc->present_ms = 0.0;
-        sc->present_real_ms = sc->refill_ms = 0.0;
+        sc->hook_ms = sc->fence_ms = sc->acquire_ms = sc->record_ms = sc->submit_ms = 0.0;
+        sc->hold_ms = 0.0;
     }
     pthread_mutex_unlock(&dev->lock);
 }
@@ -615,6 +698,227 @@ static bool spare_take(struct afmf_device *dev, struct afmf_swapchain *sc, uint3
     return true;
 }
 
+/* ---- presentation thread ------------------------------------------------------------------ */
+
+static void timespec_add_ns(struct timespec *t, uint64_t ns)
+{
+    t->tv_nsec += (long)(ns % 1000000000ull);
+    t->tv_sec += (time_t)(ns / 1000000000ull) + t->tv_nsec / 1000000000L;
+    t->tv_nsec %= 1000000000L;
+}
+
+/* One present from the layer's queue, with the parts of the application's chain that were kept.
+ * The present id only goes on the real frame: ids must increase, and the companion has none. */
+static VkResult present_one(struct afmf_device *dev, struct afmf_swapchain *sc, uint32_t image,
+                            VkSemaphore wait, const struct afmf_present_job *job, bool real)
+{
+    VkPresentIdKHR id = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR,
+        .swapchainCount = 1,
+        .pPresentIds = &job->present_id,
+    };
+    VkSwapchainPresentModeInfoEXT mode = {
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT,
+        .swapchainCount = 1,
+        .pPresentModes = &job->present_mode,
+    };
+    VkPresentInfoKHR present = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &wait,
+        .swapchainCount = 1,
+        .pSwapchains = &sc->handle,
+        .pImageIndices = &image,
+    };
+    const void **tail = &present.pNext;
+    if (job->have_present_mode) {
+        *tail = &mode;
+        tail = &mode.pNext;
+    }
+    if (real && job->have_present_id)
+        *tail = &id;
+
+    struct timespec t0, t1;
+    (void)clock_gettime(CLOCK_MONOTONIC, &t0);
+    pthread_mutex_lock(&sc->wsi_lock);
+    pthread_mutex_lock(&dev->async_lock);
+    VkResult res = dev->fns.queue_present(dev->async_queue, &present);
+    pthread_mutex_unlock(&dev->async_lock);
+    pthread_mutex_unlock(&sc->wsi_lock);
+    (void)clock_gettime(CLOCK_MONOTONIC, &t1);
+
+    /* Thread-side counters live under job_lock (never dev->lock: vkDeviceWaitIdle drains the
+     * thread while holding dev->lock). */
+    pthread_mutex_lock(&sc->job_lock);
+    if (real)
+        sc->present_real_ms += elapsed_ms(&t0, &t1);
+    else
+        sc->present_ms += elapsed_ms(&t0, &t1);
+    pthread_mutex_unlock(&sc->job_lock);
+    return res;
+}
+
+static void spare_refill(struct afmf_device *dev, struct afmf_swapchain *sc);
+
+static void *presenter_main(void *arg)
+{
+    struct afmf_swapchain *sc = arg;
+    struct afmf_device *dev = sc->dev;
+
+    pthread_mutex_lock(&sc->job_lock);
+    for (;;) {
+        while (sc->job_count == 0 && !sc->presenter_stop)
+            pthread_cond_wait(&sc->job_cond, &sc->job_lock);
+        if (sc->job_count == 0)
+            break; /* stopping, and drained */
+        struct afmf_present_job job = sc->jobs[sc->job_head];
+        bool draining = sc->presenter_stop;
+
+        VkResult first = VK_SUCCESS;
+        if (job.generate) {
+            pthread_mutex_unlock(&sc->job_lock);
+            first = present_one(dev, sc, job.companion_image, sc->sem_generated[job.companion_image],
+                                &job, false);
+            pthread_mutex_lock(&sc->job_lock);
+            /* Hold the real frame back so the generated one gets its half of the interval.
+             * A stop request (teardown) cuts the wait short. */
+            if (job.hold_ns > 0 && !draining) {
+                struct timespec until = job.arrival;
+                timespec_add_ns(&until, job.hold_ns);
+                while (!sc->presenter_stop &&
+                       pthread_cond_timedwait(&sc->job_cond, &sc->job_lock, &until) != ETIMEDOUT)
+                    ;
+            }
+        }
+        pthread_mutex_unlock(&sc->job_lock);
+        VkResult second = present_one(dev, sc, job.real_image, sc->sem_real[job.real_image], &job,
+                                      true);
+
+        /* Line up the next companion's image while the application renders. */
+        struct timespec r0, r1;
+        (void)clock_gettime(CLOCK_MONOTONIC, &r0);
+        pthread_mutex_lock(&sc->wsi_lock);
+        spare_refill(dev, sc);
+        pthread_mutex_unlock(&sc->wsi_lock);
+        (void)clock_gettime(CLOCK_MONOTONIC, &r1);
+
+        pthread_mutex_lock(&sc->job_lock);
+        sc->refill_ms += elapsed_ms(&r0, &r1);
+        /* The worst outcome reaches the application with its next present call. Errors beat
+         * SUBOPTIMAL, SUBOPTIMAL beats SUCCESS. */
+        VkResult worst = first < 0 ? first : second < 0 ? second : first != VK_SUCCESS ? first : second;
+        if (sc->deferred_result >= 0 && (worst < 0 || sc->deferred_result == VK_SUCCESS))
+            sc->deferred_result = worst;
+        sc->job_head = (sc->job_head + 1) % AFMF_MAX_JOBS;
+        sc->job_count--;
+        if (sc->job_count == 0)
+            pthread_cond_broadcast(&sc->drain_cond);
+    }
+    pthread_mutex_unlock(&sc->job_lock);
+    return NULL;
+}
+
+/* Starts the thread on first use; false leaves the presents on the application's thread. */
+static bool presenter_start(struct afmf_swapchain *sc)
+{
+    if (sc->presenter_running)
+        return true;
+    if (!sc->async || sc->presenter_stop)
+        return false;
+    if (pthread_create(&sc->presenter, NULL, presenter_main, sc) != 0) {
+        AFMF_WARN("swapchain %p: no presentation thread; presenting inline", (void *)sc->handle);
+        sc->presenter_stop = true; /* do not retry every frame */
+        return false;
+    }
+    sc->presenter_running = true;
+    return true;
+}
+
+/* Waits until every queued present went out: needed before presenting inline behind them. */
+static void presenter_drain(struct afmf_swapchain *sc)
+{
+    if (!sc->presenter_running)
+        return;
+    pthread_mutex_lock(&sc->job_lock);
+    while (sc->job_count > 0)
+        pthread_cond_wait(&sc->drain_cond, &sc->job_lock);
+    pthread_mutex_unlock(&sc->job_lock);
+}
+
+/* Drains and joins; safe to call more than once and without a running thread. */
+static void presenter_stop(struct afmf_swapchain *sc)
+{
+    if (!sc->presenter_running)
+        return;
+    pthread_mutex_lock(&sc->job_lock);
+    sc->presenter_stop = true;
+    pthread_cond_broadcast(&sc->job_cond);
+    pthread_mutex_unlock(&sc->job_lock);
+    (void)pthread_join(sc->presenter, NULL);
+    sc->presenter_running = false;
+}
+
+/* Copies what the application's chain carries that can outlive the call. False means something
+ * the layer cannot carry (a present fence, display timing, regions of a kind it does not know):
+ * the present then happens inline with the original chain. */
+static bool job_from_chain(const VkPresentInfoKHR *info, struct afmf_present_job *job)
+{
+    for (const VkBaseInStructure *s = info->pNext; s != NULL; s = s->pNext) {
+        switch ((int)s->sType) {
+        case VK_STRUCTURE_TYPE_PRESENT_ID_KHR: {
+            const VkPresentIdKHR *id = (const VkPresentIdKHR *)s;
+            if (id->pPresentIds != NULL && id->pPresentIds[0] != 0) {
+                job->have_present_id = true;
+                job->present_id = id->pPresentIds[0];
+            }
+            break;
+        }
+        case VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT: {
+            const VkSwapchainPresentModeInfoEXT *m = (const VkSwapchainPresentModeInfoEXT *)s;
+            job->have_present_mode = true;
+            job->present_mode = m->pPresentModes[0];
+            break;
+        }
+        case VK_STRUCTURE_TYPE_PRESENT_REGIONS_KHR:
+            break; /* a hint about what changed; the generated frame changes everything anyway */
+        default:
+            return false;
+        }
+    }
+    return true;
+}
+
+/* The application's vkAcquireNextImage(2)KHR: under the swapchain lock in slices, so the
+ * presentation thread never waits more than one slice and a long acquire never holds it off.
+ * Everything but the timeout is the application's. */
+VkResult afmf_swapchain_acquire(struct afmf_device *dev, const VkAcquireNextImageInfoKHR *info,
+                                bool v2, uint32_t *index)
+{
+    pthread_mutex_lock(&dev->lock);
+    struct afmf_swapchain *sc = find_locked(dev, info->swapchain);
+    pthread_mutex_unlock(&dev->lock);
+
+    VkAcquireNextImageInfoKHR sliced = *info;
+    uint64_t left = info->timeout;
+    for (;;) {
+        bool ours = sc != NULL && sc->gen_enabled;
+        sliced.timeout = ours && left > AFMF_ACQUIRE_SLICE_NS ? AFMF_ACQUIRE_SLICE_NS : left;
+        if (ours)
+            pthread_mutex_lock(&sc->wsi_lock);
+        VkResult res = v2 ? dev->fns.acquire_next_image2(dev->handle, &sliced, index)
+                          : dev->fns.acquire_next_image(dev->handle, sliced.swapchain, sliced.timeout,
+                                                        sliced.semaphore, sliced.fence, index);
+        if (ours)
+            pthread_mutex_unlock(&sc->wsi_lock);
+        if (!ours || (res != VK_TIMEOUT && res != VK_NOT_READY))
+            return res;
+        if (left != UINT64_MAX)
+            left -= sliced.timeout;
+        if (left == 0)
+            return res;
+    }
+}
+
 /* The application's present, with the generated frame in front of it when one could be made. */
 static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain *sc, VkQueue queue,
                                   uint32_t family, const VkPresentInfoKHR *info)
@@ -634,8 +938,15 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
         return afmf_device_queue_present(dev, queue, info);
     }
 
-    struct timespec t_start, t_fence, t_acquire, t_present, t_companion, t_real, t_end;
+    struct afmf_present_job job = {.real_image = i};
+    bool threaded = presenter_start(sc) && job_from_chain(info, &job);
+    if (!threaded)
+        presenter_drain(sc); /* a chain the thread cannot carry: inline, but in order */
+
+    struct timespec t_start, t_fence, t_acquire, t_record, t_submit, t_present, t_companion, t_real,
+        t_end;
     (void)clock_gettime(CLOCK_MONOTONIC, &t_start);
+    job.arrival = t_start;
 
     struct afmf_slot *slot = &sc->slots[sc->slot_index];
     if (slot->pending) {
@@ -649,15 +960,19 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
      * for us; otherwise this frame simply gets no companion, the application never waits. */
     bool generate = false;
     uint32_t j = 0;
-    if (!sc->have_history)
+    if (!sc->have_history) {
         sc->skipped_no_history++;
-    else if (spare_take(dev, sc, &j))
-        generate = true;
-    else
-        sc->skipped_no_image++;
+    } else {
+        pthread_mutex_lock(&sc->wsi_lock);
+        generate = spare_take(dev, sc, &j);
+        pthread_mutex_unlock(&sc->wsi_lock);
+        if (!generate)
+            sc->skipped_no_image++;
+    }
     (void)clock_gettime(CLOCK_MONOTONIC, &t_acquire);
 
     VkResult res = record_frame(dev, sc, slot->cmd, sc->slot_index, i, generate, j);
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_record);
     if (res == VK_SUCCESS) {
         VkSemaphore waits[AFMF_MAX_APP_WAITS];
         VkPipelineStageFlags stages[AFMF_MAX_APP_WAITS];
@@ -678,12 +993,21 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
             .signalSemaphoreCount = generate ? 2u : 1u,
             .pSignalSemaphores = signals,
         };
+        /* Inline presents follow under the same locks, in the thread's order: swapchain, then
+         * queue. */
+        if (!threaded)
+            pthread_mutex_lock(&sc->wsi_lock);
         if (sc->async)
             pthread_mutex_lock(&dev->async_lock);
         res = f->queue_submit(work_queue, 1, &submit, slot->fence);
-        if (sc->async && res != VK_SUCCESS)
+        if (sc->async && (res != VK_SUCCESS || threaded))
             pthread_mutex_unlock(&dev->async_lock);
+        if (!threaded && res != VK_SUCCESS)
+            pthread_mutex_unlock(&sc->wsi_lock);
     }
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_submit);
+    sc->record_ms += elapsed_ms(&t_acquire, &t_record);
+    sc->submit_ms += elapsed_ms(&t_record, &t_submit);
     if (res != VK_SUCCESS) {
         /* The application's semaphores were not consumed, so its own present still works. The
          * image acquired for the generated frame, if any, stays with the presentation engine. */
@@ -693,11 +1017,49 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     slot->pending = true;
     sc->slot_index = (sc->slot_index + 1) % sc->image_count;
     sc->have_history = true;
+    if (generate)
+        sc->generated++;
 
     /* Debug dumps block on the submission; only while AFMF_DUMP_DIR asks for frames. */
     if (sc->fg != NULL && afmf_framegen_dump_pending(sc->fg)) {
         (void)f->wait_for_fences(dev->handle, 1, &slot->fence, VK_TRUE, UINT64_MAX);
         afmf_framegen_dump_write(dev, sc->fg);
+    }
+
+    if (threaded) {
+        /* Hand both presents to the presentation thread and return. The results of earlier
+         * presents come back here; the application also learns OUT_OF_DATE from its acquire. */
+        job.generate = generate;
+        job.companion_image = j;
+        if (generate && afmf_config_get()->pacing) {
+            pthread_mutex_lock(&dev->lock);
+            double half_ms = sc->frame_ms_ema / 2.0;
+            pthread_mutex_unlock(&dev->lock);
+            uint64_t hold = (uint64_t)(half_ms * 1e6);
+            job.hold_ns = hold < AFMF_PACING_MIN_NS   ? 0
+                          : hold > AFMF_PACING_MAX_NS ? AFMF_PACING_MAX_NS
+                                                      : hold;
+            pthread_mutex_lock(&dev->lock);
+            sc->hold_ms += (double)job.hold_ns / 1e6;
+            pthread_mutex_unlock(&dev->lock);
+        }
+        pthread_mutex_lock(&sc->job_lock);
+        while (sc->job_count == AFMF_MAX_JOBS)
+            pthread_cond_wait(&sc->drain_cond, &sc->job_lock);
+        sc->jobs[(sc->job_head + sc->job_count) % AFMF_MAX_JOBS] = job;
+        sc->job_count++;
+        pthread_cond_broadcast(&sc->job_cond);
+        res = sc->deferred_result;
+        sc->deferred_result = VK_SUCCESS;
+        pthread_mutex_unlock(&sc->job_lock);
+        if (info->pResults != NULL)
+            info->pResults[0] = res;
+
+        (void)clock_gettime(CLOCK_MONOTONIC, &t_end);
+        sc->hook_ms += elapsed_ms(&t_start, &t_end);
+        sc->fence_ms += elapsed_ms(&t_start, &t_fence);
+        sc->acquire_ms += elapsed_ms(&t_fence, &t_acquire);
+        return res;
     }
 
     (void)clock_gettime(CLOCK_MONOTONIC, &t_present);
@@ -714,7 +1076,6 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
         if (presented < 0)
             AFMF_DEBUG("swapchain %p: generated present returned %d", (void *)sc->handle,
                        (int)presented);
-        sc->generated++;
     }
     (void)clock_gettime(CLOCK_MONOTONIC, &t_companion);
 
@@ -731,6 +1092,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     /* Try to line up the next companion's image now: by the next present, a frame later, the
      * presentation engine has had time to release one. */
     spare_refill(dev, sc);
+    pthread_mutex_unlock(&sc->wsi_lock);
 
     (void)clock_gettime(CLOCK_MONOTONIC, &t_end);
     sc->hook_ms += elapsed_ms(&t_start, &t_end);

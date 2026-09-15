@@ -420,6 +420,7 @@ static bool load_device_fns(struct afmf_device *dev, PFN_vkGetDeviceProcAddr nex
     LOAD_DEVICE_FN(queue_submit2_khr, vkQueueSubmit2KHR);
     LOAD_DEVICE_FN(queue_bind_sparse, vkQueueBindSparse);
     LOAD_DEVICE_FN(queue_wait_idle, vkQueueWaitIdle);
+    LOAD_DEVICE_FN(device_wait_idle, vkDeviceWaitIdle);
     LOAD_DEVICE_FN(create_shader_module, vkCreateShaderModule);
     LOAD_DEVICE_FN(destroy_shader_module, vkDestroyShaderModule);
     LOAD_DEVICE_FN(create_descriptor_set_layout, vkCreateDescriptorSetLayout);
@@ -458,6 +459,7 @@ static bool load_device_fns(struct afmf_device *dev, PFN_vkGetDeviceProcAddr nex
     LOAD_DEVICE_FN(destroy_swapchain, vkDestroySwapchainKHR);
     LOAD_DEVICE_FN(get_swapchain_images, vkGetSwapchainImagesKHR);
     LOAD_DEVICE_FN(acquire_next_image, vkAcquireNextImageKHR);
+    LOAD_DEVICE_FN(acquire_next_image2, vkAcquireNextImage2KHR);
     LOAD_DEVICE_FN(queue_present, vkQueuePresentKHR);
 
     const struct afmf_device_fns *f = &dev->fns;
@@ -467,7 +469,8 @@ static bool load_device_fns(struct afmf_device *dev, PFN_vkGetDeviceProcAddr nex
            f->create_fence && f->destroy_fence && f->wait_for_fences && f->reset_fences &&
            f->create_command_pool && f->destroy_command_pool && f->allocate_command_buffers &&
            f->begin_command_buffer && f->end_command_buffer && f->cmd_pipeline_barrier &&
-           f->cmd_copy_image && f->queue_submit && f->queue_wait_idle && f->create_shader_module &&
+           f->cmd_copy_image && f->queue_submit && f->queue_wait_idle && f->device_wait_idle &&
+           f->create_shader_module &&
            f->destroy_shader_module && f->create_descriptor_set_layout &&
            f->destroy_descriptor_set_layout && f->create_pipeline_layout &&
            f->destroy_pipeline_layout && f->create_compute_pipelines && f->destroy_pipeline &&
@@ -734,6 +737,22 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueBindSparse(VkQueue queue, uint32
     return res;
 }
 
+/* Every queue idle and externally synchronised: the presentation threads must have nothing
+ * queued, and the shared queue must not be in use by the layer. */
+static VKAPI_ATTR VkResult VKAPI_CALL afmf_DeviceWaitIdle(VkDevice device)
+{
+    struct afmf_device *dev = device_find(dispatch_key(device));
+    if (dev == NULL)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    afmf_swapchain_drain_all(dev);
+    if (dev->async_queue == VK_NULL_HANDLE)
+        return dev->fns.device_wait_idle(device);
+    pthread_mutex_lock(&dev->async_lock);
+    VkResult res = dev->fns.device_wait_idle(device);
+    pthread_mutex_unlock(&dev->async_lock);
+    return res;
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueWaitIdle(VkQueue queue)
 {
     struct afmf_device *dev = device_find(dispatch_key(queue));
@@ -813,6 +832,35 @@ static VKAPI_ATTR void VKAPI_CALL afmf_DestroySwapchainKHR(VkDevice device, VkSw
     afmf_swapchain_destroy(dev, swapchain, alloc);
 }
 
+static VKAPI_ATTR VkResult VKAPI_CALL afmf_AcquireNextImageKHR(VkDevice device,
+                                                               VkSwapchainKHR swapchain,
+                                                               uint64_t timeout,
+                                                               VkSemaphore semaphore, VkFence fence,
+                                                               uint32_t *index)
+{
+    struct afmf_device *dev = device_find(dispatch_key(device));
+    if (dev == NULL || dev->fns.acquire_next_image == NULL)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    VkAcquireNextImageInfoKHR info = {
+        .sType = VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR,
+        .swapchain = swapchain,
+        .timeout = timeout,
+        .semaphore = semaphore,
+        .fence = fence,
+    };
+    return afmf_swapchain_acquire(dev, &info, false, index);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL afmf_AcquireNextImage2KHR(VkDevice device,
+                                                                const VkAcquireNextImageInfoKHR *info,
+                                                                uint32_t *index)
+{
+    struct afmf_device *dev = device_find(dispatch_key(device));
+    if (dev == NULL || dev->fns.acquire_next_image2 == NULL)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    return afmf_swapchain_acquire(dev, info, true, index);
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueuePresentKHR(VkQueue queue,
                                                            const VkPresentInfoKHR *info)
 {
@@ -885,14 +933,13 @@ static const struct hook surface_hooks[] = {
 static const struct hook device_hooks[] = {
     HOOK(GetDeviceProcAddr), HOOK(DestroyDevice), HOOK(GetDeviceQueue), HOOK(GetDeviceQueue2),
     HOOK(QueueSubmit),       HOOK(QueueSubmit2),  HOOK(QueueSubmit2KHR), HOOK(QueueBindSparse),
-    HOOK(QueueWaitIdle),
+    HOOK(QueueWaitIdle),     HOOK(DeviceWaitIdle),
 };
 
 /* Only handed out when the next layer/driver has them, i.e. when VK_KHR_swapchain is enabled. */
 static const struct hook swapchain_hooks[] = {
-    HOOK(CreateSwapchainKHR),
-    HOOK(DestroySwapchainKHR),
-    HOOK(QueuePresentKHR),
+    HOOK(CreateSwapchainKHR),   HOOK(DestroySwapchainKHR),   HOOK(QueuePresentKHR),
+    HOOK(AcquireNextImageKHR),  HOOK(AcquireNextImage2KHR),
 };
 
 #define ARRAY_LEN(array) (sizeof(array) / sizeof((array)[0]))

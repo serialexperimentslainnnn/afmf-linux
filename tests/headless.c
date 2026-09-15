@@ -440,6 +440,20 @@ static bool present_frame(struct ctx *ctx, uint32_t frame)
         return false;
     }
     CHECK(vkQueueWaitIdle(ctx->queue));
+
+    /* AFMF_TEST_FRAME_MS=<n>: pace the presents like a game at that frame time, so the layer's
+     * pacing hold (half of it) shows in its profile line. */
+    static long frame_ms = -1;
+    if (frame_ms < 0) {
+        const char *wanted = getenv("AFMF_TEST_FRAME_MS");
+        frame_ms = wanted != NULL ? strtol(wanted, NULL, 10) : 0;
+        if (frame_ms < 0 || frame_ms > 1000)
+            frame_ms = 0;
+    }
+    if (frame_ms > 0) {
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = frame_ms * 1000000L};
+        (void)nanosleep(&pause, NULL);
+    }
     return true;
 }
 
@@ -486,15 +500,23 @@ static bool run(struct ctx *ctx)
     if (!create_instance(ctx, with_validation) || !pick_physical_device(ctx) ||
         !create_device_and_swapchain(ctx))
         return false;
+    /* AFMF_TEST_FRAMES=<n> for longer runs (the layer's profile line comes every 300). */
+    uint32_t frames = FRAMES;
+    const char *wanted = getenv("AFMF_TEST_FRAMES");
+    if (wanted != NULL) {
+        long n = strtol(wanted, NULL, 10);
+        if (n >= 2 && n <= 100000)
+            frames = (uint32_t)n;
+    }
     struct timespec start, end;
     (void)clock_gettime(CLOCK_MONOTONIC, &start);
-    for (uint32_t i = 0; i < FRAMES; i++)
+    for (uint32_t i = 0; i < frames; i++)
         if (!present_frame(ctx, i))
             return false;
     (void)clock_gettime(CLOCK_MONOTONIC, &end);
     double ms = ((double)(end.tv_sec - start.tv_sec) * 1e3 + (double)(end.tv_nsec - start.tv_nsec) / 1e6);
     (void)fprintf(stderr, "%ux%u: %.2f ms per present (upload + layer work, queue drained each frame)\n",
-                  ctx->extent.width, ctx->extent.height, ms / FRAMES);
+                  ctx->extent.width, ctx->extent.height, ms / frames);
     return true;
 }
 

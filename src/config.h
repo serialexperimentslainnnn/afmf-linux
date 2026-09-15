@@ -32,6 +32,7 @@ struct afmf_config {
     const char *dump_dir;        /* AFMF_DUMP_DIR: where the first generated frames are written as PPM */
     bool profile;                /* AFMF_PROFILE=1 (or AFMF_LOG=3): GPU time per pass, logged periodically */
     bool async;                  /* AFMF_ASYNC=0 keeps the work on the application's queue */
+    bool pacing;                 /* AFMF_PACING=0 presents the real frame right behind the generated one */
     bool invalid;                /* some variable was set but unparsable; caller reports it */
 };
 

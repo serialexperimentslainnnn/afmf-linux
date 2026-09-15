@@ -64,7 +64,7 @@ struct afmf_swapchain {
     uint32_t frame_time_samples;
     /* Host time the application's present thread spends inside the layer, per interval: the
      * whole hook and the three places it can block (slot fence, companion acquire, presents). */
-    double hook_ms, fence_ms, acquire_ms, present_ms;
+    double hook_ms, fence_ms, acquire_ms, present_ms, present_real_ms, refill_ms;
 
     struct afmf_swapchain *next;
 };
@@ -570,11 +570,11 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
 #define STATS_LINE                                                                                \
     "swapchain %p: %" PRIu64 " presents, %" PRIu64 " generated, %" PRIu64 " no free image; "    \
     "%.2f ms between presents (%.0f real fps); in the layer %.0f us per present: slot fence "   \
-    "%.0f, acquire %.0f, presents %.0f"
+    "%.0f, acquire %.0f, present generated %.0f, present real %.0f, refill %.0f"
 #define STATS_ARGS                                                                                \
     (void *)sc->handle, sc->present_count, sc->generated, sc->skipped_no_image, frame_ms,       \
         1e3 / frame_ms, 1e3 * sc->hook_ms / n, 1e3 * sc->fence_ms / n, 1e3 * sc->acquire_ms / n, \
-        1e3 * sc->present_ms / n
+        1e3 * sc->present_ms / n, 1e3 * sc->present_real_ms / n, 1e3 * sc->refill_ms / n
         if (afmf_config_get()->profile)
             AFMF_INFO(STATS_LINE, STATS_ARGS);
         else
@@ -584,6 +584,7 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
         sc->frame_time_ms_accum = 0.0;
         sc->frame_time_samples = 0;
         sc->hook_ms = sc->fence_ms = sc->acquire_ms = sc->present_ms = 0.0;
+        sc->present_real_ms = sc->refill_ms = 0.0;
     }
     pthread_mutex_unlock(&dev->lock);
 }
@@ -633,7 +634,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
         return afmf_device_queue_present(dev, queue, info);
     }
 
-    struct timespec t_start, t_fence, t_acquire, t_present, t_end;
+    struct timespec t_start, t_fence, t_acquire, t_present, t_companion, t_real, t_end;
     (void)clock_gettime(CLOCK_MONOTONIC, &t_start);
 
     struct afmf_slot *slot = &sc->slots[sc->slot_index];
@@ -715,6 +716,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
                        (int)presented);
         sc->generated++;
     }
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_companion);
 
     /* The real frame keeps the application's pNext chain and pResults; only the wait moves to the
      * semaphore the layer signals once it has finished reading the image. */
@@ -724,6 +726,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     res = f->queue_present(work_queue, &real);
     if (sc->async)
         pthread_mutex_unlock(&dev->async_lock);
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_real);
 
     /* Try to line up the next companion's image now: by the next present, a frame later, the
      * presentation engine has had time to release one. */
@@ -733,7 +736,9 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     sc->hook_ms += elapsed_ms(&t_start, &t_end);
     sc->fence_ms += elapsed_ms(&t_start, &t_fence);
     sc->acquire_ms += elapsed_ms(&t_fence, &t_acquire);
-    sc->present_ms += elapsed_ms(&t_present, &t_end);
+    sc->present_ms += elapsed_ms(&t_present, &t_companion);
+    sc->present_real_ms += elapsed_ms(&t_companion, &t_real);
+    sc->refill_ms += elapsed_ms(&t_real, &t_end);
     return res;
 }
 

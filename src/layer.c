@@ -820,6 +820,45 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueuePresentKHR(VkQueue queue,
     return afmf_swapchain_present(dev, queue, info);
 }
 
+/* ---- surface creation, logged ------------------------------------------------------------- */
+
+/* Hooked only to say which window system the application presents through: under Proton that is
+ * XWayland unless its Wayland driver is on, and the cost and pacing of a present differ. The
+ * create-info is passed through untouched, so one signature covers every platform without its
+ * headers. */
+typedef VkResult(VKAPI_PTR *PFN_afmf_create_surface)(VkInstance, const void *,
+                                                     const VkAllocationCallbacks *, VkSurfaceKHR *);
+
+static VkResult create_surface_logged(VkInstance instance, const char *fn_name,
+                                      const char *platform, const void *info,
+                                      const VkAllocationCallbacks *alloc, VkSurfaceKHR *out)
+{
+    struct afmf_instance *inst = instance_find(dispatch_key(instance));
+    if (inst == NULL)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    PFN_afmf_create_surface next = (PFN_afmf_create_surface)inst->gipa(instance, fn_name);
+    if (next == NULL)
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    VkResult res = next(instance, info, alloc, out);
+    if (res == VK_SUCCESS)
+        AFMF_INFO("surface %p created: %s", (void *)*out, platform);
+    return res;
+}
+
+#define SURFACE_HOOK(function, platform)                                                          \
+    static VKAPI_ATTR VkResult VKAPI_CALL afmf_##function(                                       \
+        VkInstance instance, const void *info, const VkAllocationCallbacks *alloc,               \
+        VkSurfaceKHR *out)                                                                        \
+    {                                                                                             \
+        return create_surface_logged(instance, "vk" #function, platform, info, alloc, out);      \
+    }
+
+SURFACE_HOOK(CreateWaylandSurfaceKHR, "Wayland")
+SURFACE_HOOK(CreateXcbSurfaceKHR, "X11 (xcb)")
+SURFACE_HOOK(CreateXlibSurfaceKHR, "X11 (xlib)")
+SURFACE_HOOK(CreateHeadlessSurfaceEXT, "headless")
+SURFACE_HOOK(CreateDisplayPlaneSurfaceKHR, "direct display")
+
 /* ---- proc address routing ------------------------------------------------------------------ */
 
 struct hook {
@@ -831,6 +870,12 @@ struct hook {
 
 static const struct hook instance_hooks[] = {
     HOOK(GetInstanceProcAddr), HOOK(CreateInstance), HOOK(DestroyInstance), HOOK(CreateDevice),
+};
+
+/* Only handed out when the next layer/driver has them (the platform extension is enabled). */
+static const struct hook surface_hooks[] = {
+    HOOK(CreateWaylandSurfaceKHR),   HOOK(CreateXcbSurfaceKHR),          HOOK(CreateXlibSurfaceKHR),
+    HOOK(CreateHeadlessSurfaceEXT),  HOOK(CreateDisplayPlaneSurfaceKHR),
 };
 
 static const struct hook device_hooks[] = {
@@ -870,7 +915,12 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL afmf_GetInstanceProcAddr(VkInsta
     if (instance == VK_NULL_HANDLE)
         return NULL;
     struct afmf_instance *inst = instance_find(dispatch_key(instance));
-    return inst != NULL ? inst->gipa(instance, name) : NULL;
+    if (inst == NULL)
+        return NULL;
+    fn = lookup(surface_hooks, ARRAY_LEN(surface_hooks), name);
+    if (fn != NULL)
+        return inst->gipa(instance, name) != NULL ? fn : NULL;
+    return inst->gipa(instance, name);
 }
 
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL afmf_GetDeviceProcAddr(VkDevice device,

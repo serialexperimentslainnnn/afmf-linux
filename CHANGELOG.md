@@ -26,9 +26,9 @@ All notable changes to afmf-linux are documented here. The format follows
   it is instead of warped, so a HUD, crosshair or subtitle over motion stays whole in the
   generated frame. Tests `headless_hud` and its negative control `headless_hud_negative`.
 - `AFMF_GOVERNOR` (off by default): under GPU contention, when the generated frame is ready later
-  than half the frame time three frames in a row, generation steps down (five search levels, then
-  one companion in two, then one in three) and steps back up once the GPU catches up; each step is
-  logged. `AFMF_MIN_FPS` (30): no companions below that real frame rate.
+  than a whole frame twelve frames in a row, generation steps down (five search levels, then one
+  companion in two, then one in three) and steps back up after 20 frames ready within half a
+  frame; each step is logged. `AFMF_MIN_FPS` (30): no companions below that real frame rate.
 - Present ids (`VK_KHR_present_id` and `present_id2`, what DXVK attaches) are carried on the real
   frame by the presentation thread instead of forcing the present inline; tests `headless_present_id1`
   and `headless_present_id2`.

@@ -27,11 +27,13 @@
 #define AFMF_PACING_MAX_NS 20000000ull
 /* Governor: the generated frame ready later than this fraction of the frame time, this many
  * frames in a row, steps generation down; ready before the lower fraction for this many frames
- * steps it back up. Steps: 0 everything, 1 five search levels, 2 one companion in two, 3 in three. */
-#define AFMF_GOVERNOR_LATE 0.5
-#define AFMF_GOVERNOR_EARLY 0.25
-#define AFMF_GOVERNOR_LATE_FRAMES 3u
-#define AFMF_GOVERNOR_EARLY_FRAMES 60u
+ * steps it back up. Steps: 0 everything, 1 five search levels, 2 one companion in two, 3 in three.
+ * Late means after a whole frame: a companion ready within the frame still lands before the
+ * next real one, and a GPU at 100 % is the normal state of a game, not a fault. */
+#define AFMF_GOVERNOR_LATE 1.0
+#define AFMF_GOVERNOR_EARLY 0.5
+#define AFMF_GOVERNOR_LATE_FRAMES 12u
+#define AFMF_GOVERNOR_EARLY_FRAMES 20u
 #define AFMF_GOVERNOR_STEPS 3u
 
 /* One frame handed to the presentation thread: the generated image first, the real one after

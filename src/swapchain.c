@@ -33,7 +33,8 @@ struct afmf_present_job {
     uint32_t companion_image;
     bool generate;
     struct timespec arrival;
-    uint64_t hold_ns;         /* how long after arrival the real frame goes out */
+    uint64_t hold_ns;         /* half a frame: the real frame goes out this long after the generated one is ready */
+    VkFence done;             /* the layer's submission for this frame: signalled once the generated frame is ready */
     bool have_present_id;
     uint64_t present_id;
     bool present_id_v2;   /* VK_KHR_present_id2 carried the id (same shape, its own sType) */
@@ -99,6 +100,7 @@ struct afmf_swapchain {
      * whole hook and the three places it can block (slot fence, companion acquire, presents). */
     double hook_ms, fence_ms, acquire_ms, record_ms, submit_ms;
     double present_ms, present_real_ms, refill_ms, hold_ms;
+    double gpu_delay_ms; /* generated frame ready this long after the present call (GPU contention) */
     double frame_ms_ema; /* smoothed time between the application's presents, for pacing */
 
     /* Presentation thread. Under Proton each vkQueuePresentKHR measured 170-400 us of host time
@@ -660,12 +662,13 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
     "swapchain %p: %" PRIu64 " presents, %" PRIu64 " generated, %" PRIu64 " no free image; "    \
     "%.2f ms between presents (%.0f real fps); in the layer %.0f us per present: slot fence "   \
     "%.0f, acquire %.0f, record %.0f, submit %.0f; presentation thread: present generated "   \
-    "%.0f, present real %.0f, refill %.0f, pacing hold %.2f ms"
+    "%.0f, present real %.0f, refill %.0f, gpu done +%.2f ms, pacing hold %.2f ms"
 #define STATS_ARGS                                                                                \
     (void *)sc->handle, sc->present_count, sc->generated, sc->skipped_no_image, frame_ms,       \
         1e3 / frame_ms, 1e3 * sc->hook_ms / n, 1e3 * sc->fence_ms / n, 1e3 * sc->acquire_ms / n, \
         1e3 * sc->record_ms / n, 1e3 * sc->submit_ms / n, 1e3 * sc->present_ms / n,             \
-        1e3 * sc->present_real_ms / n, 1e3 * sc->refill_ms / n, sc->hold_ms / n
+        1e3 * sc->present_real_ms / n, 1e3 * sc->refill_ms / n, sc->gpu_delay_ms / n,           \
+        sc->hold_ms / n
         pthread_mutex_lock(&sc->job_lock); /* the presentation thread's counters */
         if (afmf_config_get()->profile)
             AFMF_INFO(STATS_LINE, STATS_ARGS);
@@ -673,12 +676,11 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
             AFMF_DEBUG(STATS_LINE, STATS_ARGS);
 #undef STATS_LINE
 #undef STATS_ARGS
-        sc->present_ms = sc->present_real_ms = sc->refill_ms = 0.0;
+        sc->present_ms = sc->present_real_ms = sc->refill_ms = sc->gpu_delay_ms = sc->hold_ms = 0.0;
         pthread_mutex_unlock(&sc->job_lock);
         sc->frame_time_ms_accum = 0.0;
         sc->frame_time_samples = 0;
         sc->hook_ms = sc->fence_ms = sc->acquire_ms = sc->record_ms = sc->submit_ms = 0.0;
-        sc->hold_ms = 0.0;
     }
     pthread_mutex_unlock(&dev->lock);
 }
@@ -827,15 +829,30 @@ static void *presenter_main(void *arg)
             pthread_mutex_unlock(&sc->job_lock);
             first = present_one(dev, sc, job.companion_image, sc->sem_generated[job.companion_image],
                                 &job, false);
-            pthread_mutex_lock(&sc->job_lock);
-            /* Hold the real frame back so the generated one gets its half of the interval.
-             * A stop request (teardown) cuts the wait short. */
+            /* Hold the real frame back so the generated one gets its half of the interval. The
+             * generated frame cannot show before its GPU work is done, and under contention that
+             * is milliseconds after the present call: the half frame counts from there, capped at
+             * one frame after arrival so a starved GPU does not pile latency on. A stop request
+             * (teardown) cuts the wait short. */
+            struct timespec until = job.arrival;
             if (job.hold_ns > 0 && !draining) {
-                struct timespec until = job.arrival;
-                timespec_add_ns(&until, job.hold_ns);
+                (void)dev->fns.wait_for_fences(dev->handle, 1, &job.done, VK_TRUE, 2 * job.hold_ns);
+                struct timespec ready;
+                (void)clock_gettime(CLOCK_MONOTONIC, &ready);
+                double delay_ms = elapsed_ms(&job.arrival, &ready);
+                if (delay_ms < 0.0)
+                    delay_ms = 0.0;
+                uint64_t delay_ns = (uint64_t)(delay_ms * 1e6);
+                uint64_t hold = job.hold_ns + (delay_ns < job.hold_ns ? delay_ns : job.hold_ns);
+                timespec_add_ns(&until, hold);
+                pthread_mutex_lock(&sc->job_lock);
+                sc->gpu_delay_ms += delay_ms;
+                sc->hold_ms += (double)hold / 1e6;
                 while (!sc->presenter_stop &&
                        pthread_cond_timedwait(&sc->job_cond, &sc->job_lock, &until) != ETIMEDOUT)
                     ;
+            } else {
+                pthread_mutex_lock(&sc->job_lock);
             }
         }
         pthread_mutex_unlock(&sc->job_lock);
@@ -1041,6 +1058,14 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     job.arrival = t_start;
 
     struct afmf_slot *slot = &sc->slots[sc->slot_index];
+    if (threaded) {
+        /* The presentation thread waits on this slot's fence for its pacing; the reset below
+         * must not race that wait, so the job that last used the slot has to be done. */
+        pthread_mutex_lock(&sc->job_lock);
+        while (sc->job_count >= sc->image_count && !sc->presenter_stop)
+            pthread_cond_wait(&sc->drain_cond, &sc->job_lock);
+        pthread_mutex_unlock(&sc->job_lock);
+    }
     if (slot->pending) {
         (void)f->wait_for_fences(dev->handle, 1, &slot->fence, VK_TRUE, UINT64_MAX);
         (void)f->reset_fences(dev->handle, 1, &slot->fence);
@@ -1131,9 +1156,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
             job.hold_ns = hold < AFMF_PACING_MIN_NS   ? 0
                           : hold > AFMF_PACING_MAX_NS ? AFMF_PACING_MAX_NS
                                                       : hold;
-            pthread_mutex_lock(&dev->lock);
-            sc->hold_ms += (double)job.hold_ns / 1e6;
-            pthread_mutex_unlock(&dev->lock);
+            job.done = slot->fence;
         }
         pthread_mutex_lock(&sc->job_lock);
         while (sc->job_count == AFMF_MAX_JOBS)

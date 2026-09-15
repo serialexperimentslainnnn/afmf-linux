@@ -361,7 +361,11 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateInstance(const VkInstanceCreate
     g_instances = inst;
     pthread_mutex_unlock(&g_lock);
 
-    AFMF_INFO("layer active on instance %p", (void *)*out);
+    /* Which display sockets the process can see: a Wine process without WAYLAND_DISPLAY falls
+     * back to X11 whatever PROTON_ENABLE_WAYLAND says, and the surface line later shows it. */
+    AFMF_INFO("layer active on instance %p (WAYLAND_DISPLAY %s, DISPLAY %s)", (void *)*out,
+              getenv("WAYLAND_DISPLAY") != NULL ? "set" : "unset",
+              getenv("DISPLAY") != NULL ? "set" : "unset");
     return VK_SUCCESS;
 }
 

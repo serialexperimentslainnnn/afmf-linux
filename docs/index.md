@@ -82,7 +82,7 @@ vkd3d-proton. Other GPUs and drivers: untested, reports welcome.
 | Borderlands 4, Badass, FSR Quality (vkd3d-proton) | **125 fps** |
 | Cyberpunk 2077 on an RX 7800 XT (RDNA3), same settings | ~120-220 fps (60-110 real) |
 
-The exact launch options of each: [launch options per game]({{ '/launch-options/' | relative_url }}).
+Every capture with its graphics settings and the exact launch options: [screenshots]({{ '/screenshots/' | relative_url }}).
 
 <div class="numbers" style="grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))">
   <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/monster-hunter-wilds-max-rt-native-aa.jpg' | relative_url }}" alt="Monster Hunter Wilds at max settings with ray tracing and Native AA on Linux, 265 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>

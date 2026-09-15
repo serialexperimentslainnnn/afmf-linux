@@ -30,8 +30,8 @@ vkd3d-proton.
 Developed and measured on the RX 9070 XT. On screen with the layer at 3440x1440: Monster Hunter
 Wilds max + RT Native AA **265 fps** (120 without), Cyberpunk 2077 RT Ultra FSR Quality **243**
 (116 real per the game's counter), DOOM: The Dark Ages Ultra Nightmare **268**, Overwatch 2 Epic
-**449** (223 real), Borderlands 4 Badass **125**. Screenshots, per-stage numbers and the launch
-options of each game on the site.
+**449** (223 real), Borderlands 4 Badass **125**. The [screenshots](https://afmf-linux.digitalexperiments.dev/screenshots/)
+page has each capture with its settings and launch options.
 
 [![Cyberpunk 2077 with ray tracing: 243 fps on screen with afmf-linux, 116 real per the game's counter](docs/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-5.jpg)](https://afmf-linux.digitalexperiments.dev/) In Monster Hunter Wilds (vkd3d-proton) it takes 120 real fps to ~250 on
 screen with 76-91 us of host time per frame; in Cyberpunk 2077 with ray tracing it doubles the

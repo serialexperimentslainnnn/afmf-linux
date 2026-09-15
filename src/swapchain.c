@@ -39,6 +39,8 @@ struct afmf_present_job {
     bool have_present_mode;
     VkPresentModeKHR present_mode;
     VkFence present_fence; /* VK_EXT_swapchain_maintenance1: signalled with the real frame */
+    bool have_timing;      /* VK_EXT_present_timing: the application's timing request, real frame */
+    VkPresentTimingInfoEXT timing;
 };
 
 /* One in-flight layer submission: its command buffer and the fence that says the slot can be
@@ -728,6 +730,11 @@ static VkResult present_one(struct afmf_device *dev, struct afmf_swapchain *sc, 
         .swapchainCount = 1,
         .pFences = &job->present_fence,
     };
+    VkPresentTimingsInfoEXT timings = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_TIMINGS_INFO_EXT,
+        .swapchainCount = 1,
+        .pTimingInfos = &job->timing,
+    };
     VkPresentInfoKHR present = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
@@ -745,8 +752,12 @@ static VkResult present_one(struct afmf_device *dev, struct afmf_swapchain *sc, 
         *tail = &id;
         tail = &id.pNext;
     }
-    if (real && job->present_fence != VK_NULL_HANDLE)
+    if (real && job->present_fence != VK_NULL_HANDLE) {
         *tail = &fence;
+        tail = &fence.pNext;
+    }
+    if (real && job->have_timing)
+        *tail = &timings;
 
     struct timespec t0, t1;
     (void)clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -895,6 +906,18 @@ static bool job_from_chain(const VkPresentInfoKHR *info, struct afmf_present_job
             const VkSwapchainPresentFenceInfoEXT *f = (const VkSwapchainPresentFenceInfoEXT *)s;
             if (f->pFences != NULL)
                 job->present_fence = f->pFences[0];
+            break;
+        }
+        case VK_STRUCTURE_TYPE_PRESENT_TIMINGS_INFO_EXT: {
+            /* The application's timing request (target time, stages to query) belongs to its
+             * frame: it goes on the real present, whose past-presentation timing it will read
+             * back. The generated frame carries none. */
+            const VkPresentTimingsInfoEXT *t = (const VkPresentTimingsInfoEXT *)s;
+            if (t->pTimingInfos != NULL && t->swapchainCount >= 1) {
+                job->timing = t->pTimingInfos[0];
+                job->timing.pNext = NULL;
+                job->have_timing = true;
+            }
             break;
         }
         case VK_STRUCTURE_TYPE_PRESENT_REGIONS_KHR:

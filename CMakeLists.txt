@@ -147,7 +147,10 @@ enable_testing()
 # The loader dlcloses the driver at instance destruction; LeakSanitizer then reports the driver's
 # once-initialised allocations (reachable from its static data) as leaks with no symbols. Keeping
 # the libraries mapped makes the leak check mean something.
-set(AFMF_TEST_LOADER_ENV "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1")
+# An installed afmf-linux package (an implicit layer of the same name) would win over the build's
+# manifest in VK_ADD_LAYER_PATH and the tests would exercise the package: implicit layers are
+# disabled for the tests, except the device selector MESA_VK_DEVICE_SELECT needs.
+set(AFMF_TEST_LOADER_ENV "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1;VK_LOADER_LAYERS_DISABLE=~implicit~;VK_LOADER_LAYERS_ENABLE=VK_LAYER_MESA_device_select")
 
 add_executable(afmf_headless tests/headless.c)
 target_link_libraries(afmf_headless PRIVATE Vulkan::Vulkan)

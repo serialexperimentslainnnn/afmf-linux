@@ -95,9 +95,10 @@ static void init(void)
     long present_mode = AFMF_PRESENT_AUTO;
     /* Under GPU contention the generated frame is ready late and the layer's work is taken
      * from the game's budget: the governor steps generation down (fewer search levels, then one
-     * companion in two, then in three) and back up as the GPU catches up. Below the minimum real
-     * frame rate doubling is not worth its latency. */
-    long governor = 1;
+     * companion in two, then in three) and back up as the GPU catches up. Off by default: it
+     * trades companions for GPU headroom, a call the player makes per game. Below the minimum
+     * real frame rate doubling is not worth its latency. */
+    long governor = 0;
     long min_fps = 30;
     /* Sum of absolute 8-bit luma differences over a block's 64 pixels between the two frames at
      * rest; 128 is two levels per pixel on average, what temporal anti-aliasing leaves on a

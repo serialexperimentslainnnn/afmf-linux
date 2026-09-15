@@ -25,7 +25,7 @@ All notable changes to afmf-linux are documented here. The format follows
 - `AFMF_HUD_DETECT` (on): a pixel unchanged between the two frames on a moving block is kept as
   it is instead of warped, so a HUD, crosshair or subtitle over motion stays whole in the
   generated frame. Tests `headless_hud` and its negative control `headless_hud_negative`.
-- `AFMF_GOVERNOR` (on by default): under GPU contention, when the generated frame is ready later
+- `AFMF_GOVERNOR` (off by default): under GPU contention, when the generated frame is ready later
   than half the frame time three frames in a row, generation steps down (five search levels, then
   one companion in two, then one in three) and steps back up once the GPU catches up; each step is
   logged. `AFMF_MIN_FPS` (30): no companions below that real frame rate.

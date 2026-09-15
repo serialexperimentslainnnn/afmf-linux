@@ -518,6 +518,8 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
         inst->handle, "vkGetPhysicalDeviceSurfaceSupportKHR");
     dev->ifns.get_surface_present_modes = (PFN_vkGetPhysicalDeviceSurfacePresentModesKHR)next_gipa(
         inst->handle, "vkGetPhysicalDeviceSurfacePresentModesKHR");
+    dev->ifns.get_surface_capabilities2 = (PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR)next_gipa(
+        inst->handle, "vkGetPhysicalDeviceSurfaceCapabilities2KHR");
     dev->ifns.get_format_properties = (PFN_vkGetPhysicalDeviceFormatProperties)next_gipa(
         inst->handle, "vkGetPhysicalDeviceFormatProperties");
 

@@ -86,6 +86,7 @@ struct afmf_instance_fns {
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR get_surface_capabilities;
     PFN_vkGetPhysicalDeviceSurfaceSupportKHR get_surface_support;
     PFN_vkGetPhysicalDeviceSurfacePresentModesKHR get_surface_present_modes;
+    PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR get_surface_capabilities2; /* NULL without VK_KHR_get_surface_capabilities2 */
     PFN_vkGetPhysicalDeviceFormatProperties get_format_properties;
 };
 

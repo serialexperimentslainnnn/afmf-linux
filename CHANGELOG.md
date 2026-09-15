@@ -7,6 +7,11 @@ All notable changes to afmf-linux are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `AFMF_PRESENT_MODE` (`auto`): a swapchain created in FIFO is created in MAILBOX when the surface
+  offers it, the allowed per-present modes (`VK_EXT_swapchain_maintenance1`) get MAILBOX added,
+  and a per-present switch back to FIFO is rewritten. In FIFO the doubled presents each took a
+  refresh slot: vkcube at 165 Hz got 2 companions in 1196 presents, now 595 in 596. `keep`
+  leaves the game's mode alone.
 - `AFMF_GOVERNOR` (on by default): under GPU contention, when the generated frame is ready later
   than half the frame time three frames in a row, generation steps down (five search levels, then
   one companion in two, then one in three) and steps back up once the GPU catches up; each step is

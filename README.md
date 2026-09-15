@@ -144,6 +144,7 @@ Windows (search mode, performance mode, fast motion response) where such a setti
 | `AFMF_GAMESCOPE` | unset | `1` when the game runs under Gamescope (Steam Deck, or `gamescope -- <game>`): five extra images instead of two, and the layer passes through in the gamescope process itself |
 | `AFMF_EXTRA_IMAGES` | `2` (`5` with `AFMF_GAMESCOPE=1`) | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory; some engines abort above 8 images in total (id Tech 8) |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest the layer waits for the companion's image to be released before presenting the real frame alone. The image is requested a frame ahead, so the default never stalls the game |
+| `AFMF_PRESENT_MODE` | `auto` | `auto`: a swapchain the game creates in FIFO (vsync) is created in MAILBOX when the surface offers it, and a per-present switch back to FIFO is rewritten too. In FIFO every present takes a refresh slot and the layer doubles them, so a game above half the refresh rate loses real frames (120 at 165 Hz becomes 82); MAILBOX shows the latest frame and drops the excess. `keep` leaves the game's mode alone |
 | `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue and presents inline (diagnosis) |
 | `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: uneven cadence, the compositor may drop generated frames |
 | `AFMF_GOVERNOR` | `1` | Steps generation down while the GPU is contended (the generated frame ready later than half the frame time, three frames in a row): five search levels first, then one companion in two, then one in three; back up a step after 60 frames ready early. `0` generates every frame regardless |
@@ -168,9 +169,10 @@ AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=blend <game>
 - 32-bit applications need a 32-bit build of the layer; none is provided.
 - Swapchain formats with an interpolation variant: 8-bit RGBA/BGRA (UNORM and sRGB),
   A2B10G10R10, and RGBA16F. Others fall back to pass-through, logged at info level.
-- A game already running at the display's refresh rate in FIFO gets no companions at all (there
-  is no free image to put them in); in mailbox or immediate mode the compositor drops whatever
-  exceeds the refresh rate.
+- A game running at the display's refresh rate in FIFO gets no companions at all (there is no
+  free image to put them in), which is why the layer moves a FIFO swapchain to mailbox when the
+  surface offers it (`AFMF_PRESENT_MODE`); in mailbox or immediate mode the compositor drops
+  whatever exceeds the refresh rate.
 
 ## FAQ
 

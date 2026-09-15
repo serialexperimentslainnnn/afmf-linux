@@ -19,6 +19,7 @@ names mirror the settings AMD exposes for AFMF on Windows where such a setting e
 | `AFMF_GAMESCOPE` | unset | `1` when the game runs under Gamescope (Steam Deck, or `gamescope -- <game>`): five extra images instead of two, and the layer passes through in the gamescope process itself |
 | `AFMF_EXTRA_IMAGES` | `2` (`5` with `AFMF_GAMESCOPE=1`) | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory; some engines abort above 8 images in total (id Tech 8) |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest the layer waits for the companion's image to be released before presenting the real frame alone. The image is requested a frame ahead, so the default never stalls the game |
+| `AFMF_PRESENT_MODE` | `auto` | `auto`: a swapchain the game creates in FIFO (vsync) is created in MAILBOX when the surface offers it, and a per-present switch back to FIFO is rewritten too. In FIFO every present takes a refresh slot and the layer doubles them, so a game above half the refresh rate loses real frames (120 at 165 Hz becomes 82); MAILBOX shows the latest frame and drops the excess. `keep` leaves the game's mode alone |
 | `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue and presents inline (diagnosis) |
 | `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: uneven cadence, the compositor may drop generated frames |
 | `AFMF_GOVERNOR` | `1` | Steps generation down while the GPU is contended (the generated frame ready later than half the frame time, three frames in a row): five search levels first, then one companion in two, then one in three; back up a step after 60 frames ready early. `0` generates every frame regardless |
@@ -48,11 +49,13 @@ to a bug report.
 [AFMF info] device 0x... created, VK_KHR_swapchain enabled, no spare compute queue: sharing the application's queue 3 of family 1
 [AFMF info] surface 0x... created: Wayland
 [AFMF info] interpolation ready: 3440x1440, flow at 1720x720 (215x90 blocks of 16 px), 5 pyramid levels
-[AFMF info] swapchain 0x... created: 3440x1440, format 37, present mode 2, 5 images (app asked 3), generation on (layer queue)
+[AFMF info] swapchain 0x... created: 3440x1440, format 37, present mode 1 (app asked 2), 5 images (app asked 3), generation on (layer queue)
 [AFMF info] swapchain 0x...: 3001 presents, 2999 generated, 0 no free image; 8.05 ms between presents (124 real fps); in the layer 85 us per present: slot fence 2, acquire 3, record 41, submit 35; presentation thread: present generated 279, present real 252, refill 29, gpu done +0.41 ms, pacing hold 4.53 ms; governor step 0
 [AFMF info] swapchain 0x... destroyed after 26381 presents: 26380 generated, 1 skipped (0 no free image, 1 no history, 0 held back by the governor)
 ```
 
+- **present mode** is the swapchain's after the layer (`1` mailbox, `2` FIFO) and what the game
+  asked for; `AFMF_PRESENT_MODE=keep` stops the rewrite.
 - **real fps** is the game's own rate; MangoHud shows roughly twice that.
 - **no free image** counts presents that got no companion because the presentation engine had no
   image to give; a game in FIFO at the display's refresh rate has none to give, and Gamescope

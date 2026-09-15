@@ -8,6 +8,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 /* Presents between two cadence reports at debug level. */
@@ -70,7 +71,13 @@ struct afmf_swapchain {
     VkSwapchainKHR handle;
     VkFormat format;
     VkExtent2D extent;
-    VkPresentModeKHR present_mode;
+    VkPresentModeKHR present_mode; /* the swapchain's, after the layer's rewrite */
+    bool fifo_to_mailbox;          /* the application asked for FIFO; per-present modes are rewritten too */
+    /* The per-present modes the swapchain allows (VK_EXT_swapchain_maintenance1) after the
+     * rewrite: the application's list cut down to what is compatible with MAILBOX. Empty when
+     * the application gave no list. */
+    VkPresentModeKHR allowed_modes[8];
+    uint32_t allowed_mode_count;
     uint32_t min_image_count;
 
     /* Frame generation state; everything below `gen_enabled` is unused when it is false. */
@@ -411,6 +418,132 @@ static const char *generation_blocker(const struct afmf_device *dev,
     return NULL;
 }
 
+static bool surface_offers(const struct afmf_device *dev, VkSurfaceKHR surface, VkPresentModeKHR mode)
+{
+    VkPresentModeKHR modes[16];
+    uint32_t n = 16;
+    if (dev->ifns.get_surface_present_modes == NULL)
+        return false;
+    VkResult res = dev->ifns.get_surface_present_modes(dev->physical_device, surface, &n, modes);
+    if (res != VK_SUCCESS && res != VK_INCOMPLETE)
+        return false;
+    for (uint32_t i = 0; i < n; i++)
+        if (modes[i] == mode)
+            return true;
+    return false;
+}
+
+/* Size of a structure that may hang off VkSwapchainCreateInfoKHR, 0 for one the layer does not
+ * know (the chain is then left alone). */
+static size_t chain_node_size(VkStructureType type)
+{
+    switch ((int)type) {
+    case VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT:
+        return sizeof(VkSwapchainPresentModesCreateInfoEXT);
+    case VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_SCALING_CREATE_INFO_EXT:
+        return sizeof(VkSwapchainPresentScalingCreateInfoEXT);
+    case VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO:
+        return sizeof(VkImageFormatListCreateInfo);
+    case VK_STRUCTURE_TYPE_IMAGE_COMPRESSION_CONTROL_EXT:
+        return sizeof(VkImageCompressionControlEXT);
+    case VK_STRUCTURE_TYPE_DEVICE_GROUP_SWAPCHAIN_CREATE_INFO_KHR:
+        return sizeof(VkDeviceGroupSwapchainCreateInfoKHR);
+    case VK_STRUCTURE_TYPE_SWAPCHAIN_COUNTER_CREATE_INFO_EXT:
+        return sizeof(VkSwapchainCounterCreateInfoEXT);
+    case VK_STRUCTURE_TYPE_SWAPCHAIN_DISPLAY_NATIVE_HDR_CREATE_INFO_AMD:
+        return sizeof(VkSwapchainDisplayNativeHdrCreateInfoAMD);
+#ifdef VK_NV_low_latency2
+    case VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV:
+        return sizeof(VkSwapchainLatencyCreateInfoNV);
+#endif
+#ifdef VK_NV_present_barrier
+    case VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_BARRIER_CREATE_INFO_NV:
+        return sizeof(VkSwapchainPresentBarrierCreateInfoNV);
+#endif
+    default:
+        return 0;
+    }
+}
+
+/* Bytes and present modes a copied create chain may need. */
+#define AFMF_CHAIN_BYTES 1024u
+#define AFMF_MAX_PRESENT_MODES 8u
+
+/* Whether the swapchain may be created in MAILBOX with this chain. The list of allowed per-present
+ * modes (VK_EXT_swapchain_maintenance1) must only hold modes compatible with the swapchain's, so
+ * when the application gave one the whole chain is copied into `storage` (the chain is const,
+ * and a node cannot be replaced without copying what precedes it) with the list cut down to what
+ * the surface declares compatible with MAILBOX, MAILBOX included; `modes` receives that list. `*out`
+ * is the chain to use. False means a structure the layer cannot copy, or no way to ask the surface:
+ * the application's mode then stays. */
+static bool chain_allows_mailbox(const struct afmf_device *dev, VkSurfaceKHR surface,
+                                 const void *chain, unsigned char *storage,
+                                 VkPresentModeKHR *modes, uint32_t *mode_count, const void **out)
+{
+    const VkSwapchainPresentModesCreateInfoEXT *list = NULL;
+    for (const VkBaseInStructure *s = chain; s != NULL; s = s->pNext)
+        if (s->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT)
+            list = (const VkSwapchainPresentModesCreateInfoEXT *)s;
+    *out = chain;
+    *mode_count = 0;
+    if (list == NULL)
+        return true;
+
+    /* What may share a swapchain with MAILBOX on this surface. */
+    VkPresentModeKHR compatible[16];
+    VkSurfacePresentModeCompatibilityEXT compatibility = {
+        .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_COMPATIBILITY_EXT,
+        .presentModeCount = 16,
+        .pPresentModes = compatible,
+    };
+    VkSurfaceCapabilities2KHR caps2 = {.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR,
+                                       .pNext = &compatibility};
+    VkSurfacePresentModeEXT mailbox = {.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_EXT,
+                                       .presentMode = VK_PRESENT_MODE_MAILBOX_KHR};
+    VkPhysicalDeviceSurfaceInfo2KHR surface_info = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR,
+        .pNext = &mailbox,
+        .surface = surface,
+    };
+    if (dev->ifns.get_surface_capabilities2 == NULL ||
+        dev->ifns.get_surface_capabilities2(dev->physical_device, &surface_info, &caps2) != VK_SUCCESS)
+        return false;
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < list->presentModeCount && n < AFMF_MAX_PRESENT_MODES - 1; i++) {
+        bool ok = false;
+        for (uint32_t k = 0; k < compatibility.presentModeCount && !ok; k++)
+            ok = compatible[k] == list->pPresentModes[i];
+        if (ok && list->pPresentModes[i] != VK_PRESENT_MODE_MAILBOX_KHR)
+            modes[n++] = list->pPresentModes[i];
+    }
+    modes[n++] = VK_PRESENT_MODE_MAILBOX_KHR;
+    *mode_count = n;
+
+    size_t used = 0;
+    VkBaseOutStructure *prev = NULL;
+    for (const VkBaseInStructure *s = chain; s != NULL; s = s->pNext) {
+        size_t size = chain_node_size(s->sType);
+        used = (used + 15u) & ~(size_t)15u;
+        if (size == 0 || used + size > AFMF_CHAIN_BYTES)
+            return false;
+        VkBaseOutStructure *copy = (VkBaseOutStructure *)(storage + used);
+        memcpy(copy, s, size);
+        copy->pNext = NULL;
+        if (copy->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT) {
+            VkSwapchainPresentModesCreateInfoEXT *l = (VkSwapchainPresentModesCreateInfoEXT *)copy;
+            l->presentModeCount = n;
+            l->pPresentModes = modes;
+        }
+        if (prev != NULL)
+            prev->pNext = copy;
+        else
+            *out = copy;
+        prev = copy;
+        used += size;
+    }
+    return true;
+}
+
 VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateInfoKHR *info,
                                const VkAllocationCallbacks *alloc, VkSwapchainKHR *out)
 {
@@ -419,8 +552,29 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
 
     VkSwapchainCreateInfoKHR patched = *info;
     uint32_t families[AFMF_MAX_FAMILIES];
+    _Alignas(16) unsigned char chain_storage[AFMF_CHAIN_BYTES];
+    VkPresentModeKHR chain_modes[AFMF_MAX_PRESENT_MODES];
+    uint32_t chain_mode_count = 0;
     bool async = false;
+    bool fifo_to_mailbox = false;
     if (blocker == NULL) {
+        /* Every present takes a refresh slot in FIFO and the layer doubles the presents: a game
+         * above half the refresh rate loses real frames (120 at 165 Hz -> 82). MAILBOX shows the
+         * latest frame and drops the excess instead, which is what the doubling needs. */
+        if (afmf_config_get()->present_mode == AFMF_PRESENT_AUTO &&
+            (info->presentMode == VK_PRESENT_MODE_FIFO_KHR ||
+             info->presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR) &&
+            surface_offers(dev, info->surface, VK_PRESENT_MODE_MAILBOX_KHR)) {
+            if (chain_allows_mailbox(dev, info->surface, info->pNext, chain_storage, chain_modes,
+                                     &chain_mode_count, &patched.pNext)) {
+                patched.presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+                fifo_to_mailbox = true;
+            } else {
+                AFMF_INFO("swapchain create chain carries a structure the layer cannot copy: "
+                          "present mode %d kept",
+                          (int)info->presentMode);
+            }
+        }
         patched.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         /* Generated frames are presented from images of the same swapchain; the presentation
          * engine keeps a few queued, so one extra is not enough to find one free at present time. */
@@ -468,7 +622,10 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
     sc->dev = dev;
     sc->format = info->imageFormat;
     sc->extent = info->imageExtent;
-    sc->present_mode = info->presentMode;
+    sc->present_mode = patched.presentMode;
+    sc->fifo_to_mailbox = fifo_to_mailbox;
+    memcpy(sc->allowed_modes, chain_modes, chain_mode_count * sizeof *chain_modes);
+    sc->allowed_mode_count = chain_mode_count;
     sc->min_image_count = info->minImageCount;
     sc->async = async;
     sc->deferred_result = VK_SUCCESS;
@@ -499,10 +656,10 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
     dev->swapchains = sc;
     pthread_mutex_unlock(&dev->lock);
 
-    AFMF_INFO("swapchain %p created: %ux%u, format %d, present mode %d, %u images (app asked %u), "
-              "generation %s%s",
+    AFMF_INFO("swapchain %p created: %ux%u, format %d, present mode %d (app asked %d), %u images "
+              "(app asked %u), generation %s%s",
               (void *)sc->handle, sc->extent.width, sc->extent.height, (int)sc->format,
-              (int)sc->present_mode, sc->image_count, sc->min_image_count,
+              (int)sc->present_mode, (int)info->presentMode, sc->image_count, sc->min_image_count,
               sc->gen_enabled ? "on" : "off", sc->async ? " (layer queue)" : "");
     return VK_SUCCESS;
 }
@@ -916,8 +1073,6 @@ static VkResult present_one(struct afmf_device *dev, struct afmf_swapchain *sc, 
     return res;
 }
 
-static void spare_refill(struct afmf_device *dev, struct afmf_swapchain *sc, uint64_t timeout);
-
 static void *presenter_main(void *arg)
 {
     struct afmf_swapchain *sc = arg;
@@ -1039,7 +1194,8 @@ static void presenter_stop(struct afmf_swapchain *sc)
 /* Copies what the application's chain carries that can outlive the call. False means something
  * the layer cannot carry (a present fence, display timing, regions of a kind it does not know):
  * the present then happens inline with the original chain. */
-static bool job_from_chain(const VkPresentInfoKHR *info, struct afmf_present_job *job)
+static bool job_from_chain(const struct afmf_swapchain *sc, const VkPresentInfoKHR *info,
+                           struct afmf_present_job *job)
 {
     for (const VkBaseInStructure *s = info->pNext; s != NULL; s = s->pNext) {
         switch ((int)s->sType) {
@@ -1068,6 +1224,16 @@ static bool job_from_chain(const VkPresentInfoKHR *info, struct afmf_present_job
             const VkSwapchainPresentModeInfoEXT *m = (const VkSwapchainPresentModeInfoEXT *)s;
             job->have_present_mode = true;
             job->present_mode = m->pPresentModes[0];
+            /* The swapchain was moved to MAILBOX at creation: a switch back to FIFO would bring
+             * the halved rate back, and a mode outside the cut-down list is invalid. */
+            if (sc->fifo_to_mailbox) {
+                bool allowed = false;
+                for (uint32_t k = 0; k < sc->allowed_mode_count && !allowed; k++)
+                    allowed = sc->allowed_modes[k] == job->present_mode;
+                if (!allowed || job->present_mode == VK_PRESENT_MODE_FIFO_KHR ||
+                    job->present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR)
+                    job->present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+            }
             break;
         }
         case VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT: {
@@ -1176,7 +1342,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     }
 
     struct afmf_present_job job = {.real_image = i};
-    bool threaded = presenter_start(sc) && job_from_chain(info, &job);
+    bool threaded = presenter_start(sc) && job_from_chain(sc, info, &job);
     if (!threaded)
         presenter_drain(sc); /* a chain the thread cannot carry: inline, but in order */
 

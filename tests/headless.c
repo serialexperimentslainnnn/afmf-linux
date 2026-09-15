@@ -58,12 +58,33 @@ struct ctx {
     uint8_t *staging_mapped;
     uint32_t validation_errors;
     int present_id; /* AFMF_TEST_PRESENT_ID: 0 none, 1 VK_KHR_present_id, 2 VK_KHR_present_id2 */
+    bool present_modes; /* AFMF_TEST_PRESENT_MODES=1: VK_EXT_swapchain_maintenance1 mode list and per-present mode, FIFO */
 };
 
 static int wanted_present_id(void)
 {
     const char *v = getenv("AFMF_TEST_PRESENT_ID");
     return v == NULL ? 0 : v[0] == '2' ? 2 : v[0] == '1' ? 1 : 0;
+}
+
+static bool wanted_present_modes(void)
+{
+    const char *v = getenv("AFMF_TEST_PRESENT_MODES");
+    return v != NULL && v[0] == '1';
+}
+
+static bool device_extension_available(VkPhysicalDevice device, const char *name)
+{
+    uint32_t n = 0;
+    bool found = false;
+    if (vkEnumerateDeviceExtensionProperties(device, NULL, &n, NULL) == VK_SUCCESS && n > 0) {
+        VkExtensionProperties *props = calloc(n, sizeof *props);
+        if (props != NULL && vkEnumerateDeviceExtensionProperties(device, NULL, &n, props) == VK_SUCCESS)
+            for (uint32_t k = 0; k < n && !found; k++)
+                found = strcmp(props[k].extensionName, name) == 0;
+        free(props);
+    }
+    return found;
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL on_debug_message(
@@ -117,13 +138,20 @@ static bool create_instance(struct ctx *ctx, bool with_validation)
 {
     /* Index 0 is closest to the application: the layer under test first, validation below it. */
     const char *layers[2] = {LAYER_NAME, VALIDATION_LAYER_NAME};
-    const char *extensions[4] = {VK_KHR_SURFACE_EXTENSION_NAME,
+    const char *extensions[5] = {VK_KHR_SURFACE_EXTENSION_NAME,
                                  VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
     uint32_t extension_count = 2;
     if (with_validation)
         extensions[extension_count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
-    if (wanted_present_id() == 2) /* VK_KHR_present_id2 depends on it */
+    if (wanted_present_id() == 2 || wanted_present_modes()) /* present_id2 and surface_maintenance1 depend on it */
         extensions[extension_count++] = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
+    if (wanted_present_modes()) {
+        if (!instance_extension_available(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME)) {
+            (void)fprintf(stderr, "skipped: " VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME " unavailable\n");
+            exit(EXIT_SKIP);
+        }
+        extensions[extension_count++] = VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
+    }
     VkApplicationInfo app = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "afmf_headless",
@@ -216,8 +244,22 @@ static bool create_device_and_swapchain(struct ctx *ctx)
 {
     static const float priorities[MAX_QUEUES] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
                                                  1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-    const char *extensions[2] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL};
+    const char *extensions[3] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL, NULL};
     uint32_t extension_count = 1;
+    /* AFMF_TEST_PRESENT_MODES=1: the swapchain carries VK_EXT_swapchain_maintenance1's list of
+     * allowed per-present modes (FIFO only) and every present asks for FIFO; the layer's MAILBOX
+     * rewrite must extend the list and rewrite the per-present mode, or the presents are invalid. */
+    ctx->present_modes = wanted_present_modes();
+    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT maintenance1_features = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
+        .swapchainMaintenance1 = VK_TRUE};
+    if (ctx->present_modes) {
+        if (!device_extension_available(ctx->physical_device, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
+            (void)fprintf(stderr, "skipped: " VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME " unavailable\n");
+            exit(EXIT_SKIP);
+        }
+        extensions[extension_count++] = VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+    }
     /* AFMF_TEST_PRESENT_ID=1|2: present with VK_KHR_present_id / VK_KHR_present_id2 ids, which
      * the layer must carry on the real frame instead of falling back to inline presents. Skipped
      * when the driver or the headless surface does not offer the extension. */
@@ -228,18 +270,10 @@ static bool create_device_and_swapchain(struct ctx *ctx)
     VkPhysicalDevicePresentId2FeaturesKHR id2_features = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_2_FEATURES_KHR, .presentId2 = VK_TRUE};
 #endif
-    const void *device_next = NULL;
+    void *device_next = NULL;
     if (ctx->present_id != 0) {
         const char *ext = ctx->present_id == 2 ? "VK_KHR_present_id2" : VK_KHR_PRESENT_ID_EXTENSION_NAME;
-        uint32_t n = 0;
-        bool found = false;
-        if (vkEnumerateDeviceExtensionProperties(ctx->physical_device, NULL, &n, NULL) == VK_SUCCESS && n > 0) {
-            VkExtensionProperties *props = calloc(n, sizeof *props);
-            if (props != NULL && vkEnumerateDeviceExtensionProperties(ctx->physical_device, NULL, &n, props) == VK_SUCCESS)
-                for (uint32_t k = 0; k < n && !found; k++)
-                    found = strcmp(props[k].extensionName, ext) == 0;
-            free(props);
-        }
+        bool found = device_extension_available(ctx->physical_device, ext);
 #ifndef VK_KHR_present_id2
         if (ctx->present_id == 2)
             found = false; /* headers too old to build the structures */
@@ -266,10 +300,14 @@ static bool create_device_and_swapchain(struct ctx *ctx)
         }
         extensions[extension_count++] = ext;
 #ifdef VK_KHR_present_id2
-        device_next = ctx->present_id == 2 ? (const void *)&id2_features : (const void *)&id_features;
+        device_next = ctx->present_id == 2 ? (void *)&id2_features : (void *)&id_features;
 #else
         device_next = &id_features;
 #endif
+    }
+    if (ctx->present_modes) {
+        maintenance1_features.pNext = device_next;
+        device_next = &maintenance1_features;
     }
     VkDeviceQueueCreateInfo queues[MAX_FAMILIES] = {{
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -341,8 +379,15 @@ static bool create_device_and_swapchain(struct ctx *ctx)
     if (caps.maxImageCount > 0 && image_count > caps.maxImageCount)
         image_count = caps.maxImageCount;
 
+    static const VkPresentModeKHR fifo_only[1] = {VK_PRESENT_MODE_FIFO_KHR};
+    VkSwapchainPresentModesCreateInfoEXT allowed_modes = {
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT,
+        .presentModeCount = 1,
+        .pPresentModes = fifo_only,
+    };
     VkSwapchainCreateInfoKHR swapchain = {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .pNext = ctx->present_modes ? &allowed_modes : NULL,
         .surface = ctx->surface,
         .minImageCount = image_count,
         .imageFormat = format.format,
@@ -525,6 +570,15 @@ static bool present_frame(struct ctx *ctx, uint32_t frame)
     if (ctx->present_id == 2)
         present.pNext = &id2;
 #endif
+    static const VkPresentModeKHR fifo = VK_PRESENT_MODE_FIFO_KHR;
+    VkSwapchainPresentModeInfoEXT mode = {
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT,
+        .pNext = present.pNext,
+        .swapchainCount = 1,
+        .pPresentModes = &fifo,
+    };
+    if (ctx->present_modes)
+        present.pNext = &mode;
     res = vkQueuePresentKHR(ctx->queue, &present);
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR) {
         (void)fprintf(stderr, "vkQueuePresentKHR -> VkResult %d\n", (int)res);

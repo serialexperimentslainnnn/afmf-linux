@@ -232,6 +232,24 @@ foreach(id 1 2)
     )
 endforeach()
 
+# AFMF_PRESENT_MODE: the FIFO swapchain the test creates comes out in MAILBOX (headless offers
+# it), also with VK_EXT_swapchain_maintenance1's FIFO-only mode list and per-present FIFO on
+# every present (both must be rewritten, or validation rejects the presents); `keep` leaves FIFO.
+add_test(NAME headless_present_mode_auto COMMAND afmf_headless)
+set_tests_properties(headless_present_mode_auto PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_PRESENT_MODES=1;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
+    FAIL_REGULAR_EXPRESSION "validation error|^failed|present mode 2|presenting inline"
+    SKIP_RETURN_CODE 77
+)
+add_test(NAME headless_present_mode_keep COMMAND afmf_headless)
+set_tests_properties(headless_present_mode_keep PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_PRESENT_MODE=keep;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "present mode 2 \\(app asked 2\\)"
+    FAIL_REGULAR_EXPRESSION "validation error|^failed|present mode 1"
+    SKIP_RETURN_CODE 77
+)
+
 if(AFMF_SANITIZE)
     foreach(target afmf-linux afmf_headless)
         target_compile_options(${target} PRIVATE ${AFMF_SANITIZE_FLAGS})

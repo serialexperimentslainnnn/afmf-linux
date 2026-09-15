@@ -57,9 +57,8 @@ static void init(void)
     /* Measured with vkcube on a 165 Hz Wayland desktop: a free image only comes back once the
      * compositor releases one, i.e. about one refresh period later, so the wait has to cover a
      * period of the slowest common display (60 Hz, 16.7 ms). Two extra images made 294 of 296
-     * presents generate; one extra was not enough. Three is the chosen default: same result as
-     * two on the test box, one image of headroom for compositors that hold more. */
-    long extra_images = 3;
+     * presents generate; one extra was not enough. */
+    long extra_images = 2;
     long acquire_timeout_us = 16000;
     long interpolate = 1;
     /* ADLX search mode: standard keeps the search to 5 pyramid levels (+-128 px), high uses all 7

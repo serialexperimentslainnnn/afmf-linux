@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <vulkan/vulkan.h>
 
 #define LAYER_NAME "VK_LAYER_AFMF"
@@ -230,6 +231,14 @@ static bool create_device_and_swapchain(struct ctx *ctx)
     if (extent.width == UINT32_MAX) { /* the surface lets the swapchain choose */
         extent.width = 640;
         extent.height = 480;
+        /* AFMF_TEST_EXTENT=WxH to time the layer at a game-like resolution. */
+        const char *wanted = getenv("AFMF_TEST_EXTENT");
+        unsigned w = 0, h = 0;
+        if (wanted != NULL && sscanf(wanted, "%ux%u", &w, &h) == 2 && w >= 128 && h >= 128 &&
+            w <= 8192 && h <= 8192) {
+            extent.width = w;
+            extent.height = h;
+        }
     }
     uint32_t image_count = caps.minImageCount + 1;
     if (caps.maxImageCount > 0 && image_count > caps.maxImageCount)
@@ -446,9 +455,15 @@ static bool run(struct ctx *ctx)
     if (!create_instance(ctx, with_validation) || !pick_physical_device(ctx) ||
         !create_device_and_swapchain(ctx))
         return false;
+    struct timespec start, end;
+    (void)clock_gettime(CLOCK_MONOTONIC, &start);
     for (uint32_t i = 0; i < FRAMES; i++)
         if (!present_frame(ctx, i))
             return false;
+    (void)clock_gettime(CLOCK_MONOTONIC, &end);
+    double ms = ((double)(end.tv_sec - start.tv_sec) * 1e3 + (double)(end.tv_nsec - start.tv_nsec) / 1e6);
+    (void)fprintf(stderr, "%ux%u: %.2f ms per present (upload + layer work, queue drained each frame)\n",
+                  ctx->extent.width, ctx->extent.height, ms / FRAMES);
     return true;
 }
 

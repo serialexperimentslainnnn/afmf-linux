@@ -16,11 +16,10 @@
 /* Wait semaphores an application may attach to one present before the layer gives up on it. */
 #define AFMF_MAX_APP_WAITS 8u
 
-/* One in-flight layer submission: its command buffer, the semaphore its acquire signals and the
- * fence that says the slot can be reused. */
+/* One in-flight layer submission: its command buffer and the fence that says the slot can be
+ * reused. */
 struct afmf_slot {
     VkCommandBuffer cmd;
-    VkSemaphore acquired;
     VkFence fence;
     bool pending;
 };
@@ -48,6 +47,13 @@ struct afmf_swapchain {
     VkDeviceMemory history_memory;
     VkImageLayout history_layout;
     bool have_history;
+    /* The image the next companion goes into. Acquired without waiting, ideally at the end of the
+     * previous present, so the application's thread never waits for the presentation engine: on a
+     * FIFO desktop a free image comes back one refresh period after a present, and waiting for it
+     * in the hook cost the application that whole period (measured: 5.1-5.9 ms at 165 Hz). */
+    bool spare_valid;
+    uint32_t spare_image;
+    VkFence spare_fence; /* signalled once the presentation engine has released spare_image */
 
     uint64_t present_count;
     uint64_t generated;
@@ -56,6 +62,9 @@ struct afmf_swapchain {
     struct timespec last_present;
     double frame_time_ms_accum;
     uint32_t frame_time_samples;
+    /* Host time the application's present thread spends inside the layer, per interval: the
+     * whole hook and the three places it can block (slot fence, companion acquire, presents). */
+    double hook_ms, fence_ms, acquire_ms, present_ms;
 
     struct afmf_swapchain *next;
 };
@@ -163,12 +172,13 @@ static VkResult gen_init(struct afmf_device *dev, struct afmf_swapchain *sc)
         if (res == VK_SUCCESS)
             res = dev->fns.create_semaphore(dev->handle, &semaphore, NULL, &sc->sem_real[i]);
         if (res == VK_SUCCESS)
-            res = dev->fns.create_semaphore(dev->handle, &semaphore, NULL, &sc->slots[i].acquired);
-        if (res == VK_SUCCESS)
             res = dev->fns.create_fence(dev->handle, &fence, NULL, &sc->slots[i].fence);
         if (res != VK_SUCCESS)
             return res;
     }
+    res = dev->fns.create_fence(dev->handle, &fence, NULL, &sc->spare_fence);
+    if (res != VK_SUCCESS)
+        return res;
     if (afmf_config_get()->interpolate)
         sc->fg = afmf_framegen_create(dev, sc->format, sc->extent, sc->image_count);
     return sc->fg != NULL ? VK_SUCCESS : create_history(dev, sc);
@@ -234,9 +244,17 @@ static void gen_teardown(struct afmf_device *dev, struct afmf_swapchain *sc)
                 (void)f->wait_for_fences(dev->handle, 1, &slot->fence, VK_TRUE, UINT64_MAX);
             if (slot->fence != VK_NULL_HANDLE)
                 f->destroy_fence(dev->handle, slot->fence, NULL);
-            if (slot->acquired != VK_NULL_HANDLE)
-                f->destroy_semaphore(dev->handle, slot->acquired, NULL);
         }
+    }
+    if (sc->spare_fence != VK_NULL_HANDLE) {
+        /* A spare never presented still has its release pending; bounded, a compositor that never
+         * answers must not hang the application's teardown. */
+        if (sc->spare_valid &&
+            f->wait_for_fences(dev->handle, 1, &sc->spare_fence, VK_TRUE, 1000000000ull) != VK_SUCCESS)
+            AFMF_WARN("swapchain %p: spare image never released", (void *)sc->handle);
+        f->destroy_fence(dev->handle, sc->spare_fence, NULL);
+        sc->spare_fence = VK_NULL_HANDLE;
+        sc->spare_valid = false;
     }
     if (sc->pool != VK_NULL_HANDLE)
         f->destroy_command_pool(dev->handle, sc->pool, NULL); /* frees the command buffers */
@@ -545,14 +563,55 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
     }
     sc->present_count++;
     if (sc->frame_time_samples == AFMF_STATS_INTERVAL) {
-        AFMF_DEBUG("swapchain %p: %" PRIu64 " presents, %" PRIu64 " generated, avg %.2f ms between "
-                   "presents",
-                   (void *)sc->handle, sc->present_count, sc->generated,
-                   sc->frame_time_ms_accum / (double)sc->frame_time_samples);
+        double n = (double)sc->frame_time_samples;
+        double frame_ms = sc->frame_time_ms_accum / n;
+        /* Where the application's thread waits: with AFMF_PROFILE this is the number that says
+         * whether the layer costs the game host time (the GPU work is off its queue). */
+#define STATS_LINE                                                                                \
+    "swapchain %p: %" PRIu64 " presents, %" PRIu64 " generated, %" PRIu64 " no free image; "    \
+    "%.2f ms between presents (%.0f real fps); in the layer %.0f us per present: slot fence "   \
+    "%.0f, acquire %.0f, presents %.0f"
+#define STATS_ARGS                                                                                \
+    (void *)sc->handle, sc->present_count, sc->generated, sc->skipped_no_image, frame_ms,       \
+        1e3 / frame_ms, 1e3 * sc->hook_ms / n, 1e3 * sc->fence_ms / n, 1e3 * sc->acquire_ms / n, \
+        1e3 * sc->present_ms / n
+        if (afmf_config_get()->profile)
+            AFMF_INFO(STATS_LINE, STATS_ARGS);
+        else
+            AFMF_DEBUG(STATS_LINE, STATS_ARGS);
+#undef STATS_LINE
+#undef STATS_ARGS
         sc->frame_time_ms_accum = 0.0;
         sc->frame_time_samples = 0;
+        sc->hook_ms = sc->fence_ms = sc->acquire_ms = sc->present_ms = 0.0;
     }
     pthread_mutex_unlock(&dev->lock);
+}
+
+/* Acquires the spare when there is none, without waiting. */
+static void spare_refill(struct afmf_device *dev, struct afmf_swapchain *sc)
+{
+    if (sc->spare_valid)
+        return;
+    VkResult res = dev->fns.acquire_next_image(dev->handle, sc->handle, 0, VK_NULL_HANDLE,
+                                               sc->spare_fence, &sc->spare_image);
+    sc->spare_valid = res == VK_SUCCESS || res == VK_SUBOPTIMAL_KHR;
+}
+
+/* Hands out the spare for this frame's companion once the presentation engine has released it;
+ * false leaves it for the next frame (or means there was none to be had). */
+static bool spare_take(struct afmf_device *dev, struct afmf_swapchain *sc, uint32_t *image)
+{
+    spare_refill(dev, sc);
+    if (!sc->spare_valid)
+        return false;
+    if (dev->fns.wait_for_fences(dev->handle, 1, &sc->spare_fence, VK_TRUE,
+                                 afmf_config_get()->acquire_timeout_ns) != VK_SUCCESS)
+        return false;
+    (void)dev->fns.reset_fences(dev->handle, 1, &sc->spare_fence);
+    sc->spare_valid = false;
+    *image = sc->spare_image;
+    return true;
 }
 
 /* The application's present, with the generated frame in front of it when one could be made. */
@@ -574,40 +633,37 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
         return f->queue_present(queue, info);
     }
 
+    struct timespec t_start, t_fence, t_acquire, t_present, t_end;
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_start);
+
     struct afmf_slot *slot = &sc->slots[sc->slot_index];
     if (slot->pending) {
         (void)f->wait_for_fences(dev->handle, 1, &slot->fence, VK_TRUE, UINT64_MAX);
         (void)f->reset_fences(dev->handle, 1, &slot->fence);
         slot->pending = false;
     }
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_fence);
 
-    /* Acquire the image the generated frame goes into, waiting at most a short, bounded time: the
-     * application may hold every other image, and then this frame simply gets no companion. */
-    bool generate = sc->have_history;
+    /* The image the generated frame goes into: the spare, if the presentation engine has one
+     * for us; otherwise this frame simply gets no companion, the application never waits. */
+    bool generate = false;
     uint32_t j = 0;
-    if (generate) {
-        VkResult acquired = f->acquire_next_image(dev->handle, sc->handle,
-                                                  afmf_config_get()->acquire_timeout_ns,
-                                                  slot->acquired, VK_NULL_HANDLE, &j);
-        if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
-            generate = false;
-            sc->skipped_no_image++;
-        }
-    } else {
+    if (!sc->have_history)
         sc->skipped_no_history++;
-    }
+    else if (spare_take(dev, sc, &j))
+        generate = true;
+    else
+        sc->skipped_no_image++;
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_acquire);
 
     VkResult res = record_frame(dev, sc, slot->cmd, sc->slot_index, i, generate, j);
     if (res == VK_SUCCESS) {
-        VkSemaphore waits[AFMF_MAX_APP_WAITS + 1];
-        VkPipelineStageFlags stages[AFMF_MAX_APP_WAITS + 1];
+        VkSemaphore waits[AFMF_MAX_APP_WAITS];
+        VkPipelineStageFlags stages[AFMF_MAX_APP_WAITS];
         uint32_t wait_count = 0;
+        /* Only the application's semaphores: the spare's release was waited on the host. */
         for (uint32_t k = 0; k < info->waitSemaphoreCount; k++) {
             waits[wait_count] = info->pWaitSemaphores[k];
-            stages[wait_count++] = VK_PIPELINE_STAGE_TRANSFER_BIT;
-        }
-        if (generate) {
-            waits[wait_count] = slot->acquired;
             stages[wait_count++] = VK_PIPELINE_STAGE_TRANSFER_BIT;
         }
         VkSemaphore signals[2] = {sc->sem_real[i], generate ? sc->sem_generated[j] : VK_NULL_HANDLE};
@@ -643,6 +699,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
         afmf_framegen_dump_write(dev, sc->fg);
     }
 
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_present);
     if (generate) {
         VkPresentInfoKHR companion = {
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -667,6 +724,16 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     res = f->queue_present(work_queue, &real);
     if (sc->async)
         pthread_mutex_unlock(&dev->async_lock);
+
+    /* Try to line up the next companion's image now: by the next present, a frame later, the
+     * presentation engine has had time to release one. */
+    spare_refill(dev, sc);
+
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_end);
+    sc->hook_ms += elapsed_ms(&t_start, &t_end);
+    sc->fence_ms += elapsed_ms(&t_start, &t_fence);
+    sc->acquire_ms += elapsed_ms(&t_fence, &t_acquire);
+    sc->present_ms += elapsed_ms(&t_present, &t_end);
     return res;
 }
 

@@ -42,7 +42,9 @@ run_vkcube() {
     for kv in "$@"; do export "${kv?}"; done
     # Implicit layers are searched separately from explicit ones: VK_ADD_LAYER_PATH would not do.
     export VK_ADD_IMPLICIT_LAYER_PATH="${BUILD_DIR}/layer"
-    vkcube --c "$frames" --suppress_popups
+    # Mailbox: uncapped, so companions have room. In FIFO at the refresh rate the presentation
+    # engine has no free image to give and the layer, by design, generates nothing.
+    vkcube --c "$frames" --suppress_popups --present_mode 1
   ) >"$out" 2>&1 || { tail -n 20 -- "$out" >&2; die "vkcube exited with an error (last 20 lines above)"; }
 }
 

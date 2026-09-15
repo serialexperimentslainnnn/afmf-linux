@@ -55,11 +55,12 @@ static void init(void)
 {
     long log_level = AFMF_LOG_WARN;
     /* Measured with vkcube on a 165 Hz Wayland desktop: a free image only comes back once the
-     * compositor releases one, i.e. about one refresh period later, so the wait has to cover a
-     * period of the slowest common display (60 Hz, 16.7 ms). Two extra images made 294 of 296
-     * presents generate; one extra was not enough. */
+     * compositor releases one, about one refresh period after a present. Two extra images make
+     * one available by the next present; one extra was not enough. The companion's image is
+     * acquired a frame ahead (swapchain.c, spare_*), so no wait is needed in the present hook:
+     * the timeout only bounds the wait for a spare's release, and 0 means never stall the game. */
     long extra_images = 2;
-    long acquire_timeout_us = 16000;
+    long acquire_timeout_us = 0;
     long interpolate = 1;
     /* ADLX search mode: standard keeps the search to 5 pyramid levels (+-128 px), high uses all 7
      * (+-512 px); auto lets the flow resolution decide (framegen.c). */

@@ -91,7 +91,7 @@ Windows (search mode, performance mode, fast motion response) where such a setti
 | `AFMF_SEARCH_MODE` | `auto` | `standard`: 5 pyramid levels. `high`: 7 levels, motion up to +-512 flow pixels. `auto`: 7 at full resolution, 5 at half |
 | `AFMF_FAST_MOTION_RESPONSE` | `repeat` | What to show where the flow is unreliable: `repeat` the previous frame, or `blend` both |
 | `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory |
-| `AFMF_ACQUIRE_TIMEOUT_US` | `16000` | Longest the layer waits for a free swapchain image before presenting the real frame alone. `0` never waits |
+| `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest the layer waits for the companion's image to be released before presenting the real frame alone. The image is requested a frame ahead, so the default never stalls the game |
 | `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue (diagnosis, or drivers without a spare compute queue) |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_PROFILE` | `0` | `1` logs GPU time per stage every 300 frames and at teardown |
@@ -115,8 +115,9 @@ AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=blend <game>
 - Swapchain formats with an interpolation variant: 8-bit RGBA/BGRA (UNORM and sRGB),
   A2B10G10R10, and RGBA16F. Others fall back to pass-through, logged at info level.
 - Frame pacing depends on the presentation mode: in FIFO the companion and the real frame take
-  consecutive refresh slots; in mailbox or immediate mode the compositor may drop the companion when
-  the presented rate exceeds the refresh rate.
+  consecutive refresh slots, and a game already running at the refresh rate gets no companions at
+  all (there is no free image to put them in); in mailbox or immediate mode the compositor may drop
+  the companion when the presented rate exceeds the refresh rate.
 
 ## Tests
 

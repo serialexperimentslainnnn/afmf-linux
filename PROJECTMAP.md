@@ -20,7 +20,8 @@ has no interpolation variant fall back to repeating the previous frame.
 | Which swapchain formats interpolate and how | `src/framegen.c` `describe_format` | R8G8B8A8, B8G8R8A8 (+sRGB), A2B10G10R10, R16G16B16A16F |
 | FidelityFX sources (never edited) | `shaders/fidelityfx/` | `NOTICE.md` has tag, commit and mapping |
 | What is recorded per frame around framegen | `src/swapchain.c` `record_frame` | Image i arrives PRESENT_SRC and leaves PRESENT_SRC |
-| The present flow: acquire companion, submit, two presents | `src/swapchain.c` `present_generated` | On `dev->async_queue` when the swapchain is `sc->async`; never blocks longer than `AFMF_ACQUIRE_TIMEOUT_US` |
+| The present flow: take the spare, submit, two presents, refill the spare | `src/swapchain.c` `present_generated`, `spare_take`, `spare_refill` | On `dev->async_queue` when the swapchain is `sc->async`; never waits for the presentation engine (`AFMF_ACQUIRE_TIMEOUT_US=0`) |
+| Host time the game's thread spends in the layer | `src/swapchain.c` `update_cadence` | Every 300 presents with `AFMF_PROFILE=1`: real fps, hook/fence/acquire/present us |
 | The layer's own compute queue (family choice, extra queue request) | `src/layer.c` `choose_async_family`, `queues_with_extra` | Stamped with `pfnSetDeviceLoaderData` like command buffers |
 | Why a swapchain falls back to pass-through | `src/swapchain.c` `generation_blocker` | Logged at INFO with the reason |
 | Swapchain creation patch (extra images, transfer usage) | `src/swapchain.c` `afmf_swapchain_create` | |
@@ -57,7 +58,7 @@ has no interpolation variant fall back to repeating the previous frame.
 | `DISABLE_AFMF=1` | unset | Keeps it out even if enabled |
 | `AFMF_LOG` | `1` | 0 error, 1 warn, 2 info, 3 debug (stderr) |
 | `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the app asked (1..8) |
-| `AFMF_ACQUIRE_TIMEOUT_US` | `16000` | Longest wait for a free image before presenting without a companion |
+| `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest wait for the spare image's release before presenting without a companion; the spare is acquired a frame ahead (`spare_*`) |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_SEARCH_MODE` | `auto` | `standard` = 5 pyramid levels, `high` = 7; `auto` = 7 at full flow resolution, 5 at half (`fg->levels`) |
 | `AFMF_FAST_MOTION_RESPONSE` | `repeat` | `repeat` or `blend` for pixels the flow cannot trust (scene change, > 64 px) |
@@ -76,6 +77,7 @@ shaders, the driver or the resolution change; review this table with every optim
 | 2026-09-15 | `631b0c0` + profiler | 1222 us | block search 85 % (1038 us); everything else < 40 us each | Baseline; all on the application's queue |
 | 2026-09-15 | async queue | 1222 us (unchanged) | same | Work and presents moved to the layer's compute queue (RADV family 1); headless host critical path 5.58 -> 4.82 ms median of 3 (host is upload-bound, not a game proxy) |
 | 2026-09-15 | performance mode | 493 us on the app queue (quality 1224) | search 331 us (67 %) | Flow at half resolution; golden test identical. On the compute queue the same work reads 1395 us (quality 4329) of wall time: the ACE shares the GPU with graphics and the idle host lowers clocks; the host's own frame is still shorter with async (4.24 vs 4.70 ms) |
+| 2026-09-15 | spare image, no acquire wait | host: 5,900 -> 60 us per present in the hook (vkcube, FIFO 165 Hz); GPU unchanged | acquire wait was 5,100-5,900 us of it | The companion's image is acquired a frame ahead with timeout 0 and its release fence waited on the host at use time. In mailbox/immediate vkcube generates 995 of 996 with a 40 us hook; in FIFO at the refresh rate it generates nothing, which is right. Explains MH Wilds: base 120 real fps, 92 with the layer = 2.5 ms per frame lost, 0.43 of them GPU |
 | 2026-09-15 | 5 levels at half + scoped barriers | 434 us (433-445, N=3) | search 298 us (69 %) | Two coarsest levels dropped in `auto` at half resolution (they searched +-256/+-512 screen px for 46 us), compute-only barriers between passes, none between pyramid and SCD histogram. Measured and rejected: wave32 for compute (`RADV_PERFTEST=cswave32`: search unchanged, total +17 us); native SAD (`v_sad_u8`/`v_msad_u8`) is unreachable from GLSL, ACO emits neither for any SAD shape |
 
 ## Commands
@@ -131,8 +133,14 @@ shaders, the driver or the resolution change; review this table with every optim
   tree, implicit enabling (`AFMF_ENABLE=1`) needs `VK_ADD_IMPLICIT_LAYER_PATH`; enabling by name
   (`tests/headless.c`, ctest) needs `VK_ADD_LAYER_PATH`.
 - **Free images come back one refresh period late** on Wayland/FIFO (measured on a 165 Hz KDE
-  desktop): with 1 extra image and no wait, 1 of 596 presents got a companion; 2 extra + 8 ms gave
-  294 of 296. Hence the defaults. Headless surfaces release immediately, so ctest cannot catch this.
+  desktop), and **waiting for one in the present hook costs the game that period**: 5.1-5.9 ms per
+  present at 165 Hz. The companion's image is therefore acquired a frame ahead, never waited for.
+  A FIFO game already at the refresh rate gets no companions (no free image, by design); mailbox
+  and immediate get nearly all. Headless surfaces signal the release asynchronously, which is why
+  ctest sets `AFMF_ACQUIRE_TIMEOUT_US=16000`: it checks generation, not the never-stall policy.
+- **`vkAcquireNextImageKHR` with a fence, not a semaphore, for the spare**: a binary semaphore
+  cannot be re-acquired until the submit that waited on it has run, and the spare lives across
+  slots; the fence is waited on the host (already signalled a frame later) and reset.
 - **Pacing is the display's, not ours**: in FIFO the companion and the real frame take consecutive
   refresh slots, so the cadence is even only when the refresh rate is a multiple of the game's frame
   rate (cap the game at half the refresh). In MAILBOX/IMMEDIATE the companion is presented

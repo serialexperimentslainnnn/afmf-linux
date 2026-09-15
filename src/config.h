@@ -23,7 +23,7 @@ enum afmf_fast_motion_response {
 struct afmf_config {
     int log_level;               /* AFMF_LOG, 0..3; default AFMF_LOG_WARN */
     uint32_t extra_images;       /* AFMF_EXTRA_IMAGES, 1..8: swapchain images added for generation */
-    uint64_t acquire_timeout_ns; /* AFMF_ACQUIRE_TIMEOUT_US: how long to wait for a free image */
+    uint64_t acquire_timeout_ns; /* AFMF_ACQUIRE_TIMEOUT_US: how long to wait for the spare's release */
     bool interpolate;            /* AFMF_INTERPOLATE=0 falls back to repeating the previous frame */
     uint32_t flow_levels;        /* optical flow pyramid levels derived from search_mode: 5 or 7 */
     enum afmf_search_mode search_mode; /* AFMF_SEARCH_MODE: auto | standard | high */

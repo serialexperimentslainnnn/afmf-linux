@@ -21,6 +21,9 @@
 
 #define AFMF_FLOW_BLOCK 8u
 #define AFMF_DUMP_FRAMES 4u
+/* The SDK's scene change detector reports a change for its first six frames and the search stores
+ * zero vectors while it does: dumps start after that, or they show a plain blend. */
+#define AFMF_DUMP_FIRST 8u
 #define AFMF_PROFILE_QUERIES 32u  /* timestamps per slot: one at start, one after each stage */
 #define AFMF_PROFILE_INTERVAL 300u
 
@@ -110,6 +113,7 @@ struct interpolate_push {
     int32_t fallback;
     float max_motion;
     float flow_scale;
+    float hud_threshold;
 };
 
 struct downsample_push {
@@ -393,8 +397,10 @@ struct afmf_framegen {
     VkBuffer dump_buffer;
     VkDeviceMemory dump_memory;
     uint8_t *dump_mapped;
+    VkDeviceSize dump_size;
     uint32_t dumps_written;
     bool dump_recorded; /* the command buffer in flight copies into dump_buffer */
+    uint32_t dump_frame;  /* frame index of that dump: the companion of real frame dump_frame */
 };
 
 struct secondary {
@@ -585,8 +591,10 @@ static uint32_t align_up(uint32_t value, uint32_t alignment)
 
 static VkResult resources_create(struct afmf_device *dev, struct afmf_framegen *fg)
 {
+    /* TRANSFER_SRC only serves the AFMF_DUMP_DIR readback of luma and flow. */
     const VkImageUsageFlags internal = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                                       VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                                       VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     VkResult res;
 
     /* Luma pyramid: level k is the flow resolution >> k; flow: 8x8 blocks, then halved. */
@@ -703,7 +711,14 @@ static void dump_buffer_create(struct afmf_device *dev, struct afmf_framegen *fg
     if (afmf_config_get()->dump_dir == NULL || !eight_bit)
         return;
 
-    VkDeviceSize size = (VkDeviceSize)fg->extent.width * fg->extent.height * 4u;
+    /* The generated frame, then the level-0 flow after the filter and straight from the search
+     * (rg16i, one texel per block), the scene change detector's three words, and the level-0
+     * luma of both frames (r8ui). */
+    VkDeviceSize size = (VkDeviceSize)fg->extent.width * fg->extent.height * 4u +
+                        2u * (VkDeviceSize)fg->flow_size[0].width * fg->flow_size[0].height * 4u +
+                        AFMF_SCD_SLOTS * 4u +
+                        2u * (VkDeviceSize)fg->luma_size[0].width * fg->luma_size[0].height;
+    fg->dump_size = size;
     VkBufferCreateInfo buffer = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = size,
@@ -825,7 +840,13 @@ static void profiler_begin(struct afmf_device *dev, struct afmf_framegen *fg, Vk
 
 bool afmf_framegen_dump_pending(const struct afmf_framegen *fg)
 {
-    return fg->dump_mapped != NULL && fg->dumps_written < AFMF_DUMP_FRAMES;
+    return fg->dump_mapped != NULL && fg->frame_index >= AFMF_DUMP_FIRST &&
+           fg->dumps_written < AFMF_DUMP_FRAMES;
+}
+
+bool afmf_framegen_dump_recorded(const struct afmf_framegen *fg)
+{
+    return fg->dump_recorded;
 }
 
 void afmf_framegen_dump_write(struct afmf_device *dev, struct afmf_framegen *fg)
@@ -836,14 +857,20 @@ void afmf_framegen_dump_write(struct afmf_device *dev, struct afmf_framegen *fg)
     fg->dump_recorded = false;
     fg->dumps_written++;
 
+    /* The readback memory is host-visible but uncached: one sequential copy out of it, then
+     * everything below reads ordinary memory (byte by byte from the mapping it took ~200 ms). */
+    uint8_t *data = malloc(fg->dump_size);
+    if (data == NULL)
+        return;
+    memcpy(data, fg->dump_mapped, fg->dump_size);
+
     char path[512];
     int n = snprintf(path, sizeof path, "%s/afmf_generated_%u.ppm", afmf_config_get()->dump_dir,
-                     fg->dumps_written);
-    if (n < 0 || (size_t)n >= sizeof path)
-        return;
-    FILE *out = fopen(path, "wb");
+                     fg->dump_frame);
+    FILE *out = n < 0 || (size_t)n >= sizeof path ? NULL : fopen(path, "wb");
     if (out == NULL) {
         AFMF_WARN("cannot write %s", path);
+        free(data);
         return;
     }
     uint32_t w = fg->extent.width, h = fg->extent.height;
@@ -851,15 +878,63 @@ void afmf_framegen_dump_write(struct afmf_device *dev, struct afmf_framegen *fg)
     /* The buffer holds what the swapchain sees: RGBA, or BGRA when the shader swapped for a
      * B8G8R8A8 target, so undo the swap here. */
     bool bgra = fg->variant == VARIANT_RGBA8_BGRA;
-    for (size_t i = 0; i < (size_t)w * h; i++) {
-        const uint8_t *px = fg->dump_mapped + i * 4;
-        uint8_t rgb[3] = {px[bgra ? 2 : 0], px[1], px[bgra ? 0 : 2]};
-        (void)fwrite(rgb, 1, sizeof rgb, out);
+    uint8_t *row = malloc((size_t)w * 3);
+    for (uint32_t y = 0; row != NULL && y < h; y++) {
+        const uint8_t *px = data + (size_t)y * w * 4;
+        for (uint32_t x = 0; x < w; x++, px += 4) {
+            row[x * 3] = px[bgra ? 2 : 0];
+            row[x * 3 + 1] = px[1];
+            row[x * 3 + 2] = px[bgra ? 0 : 2];
+        }
+        (void)fwrite(row, 1, (size_t)w * 3, out);
     }
+    free(row);
     if (fclose(out) != 0)
         AFMF_WARN("error writing %s", path);
     else
         AFMF_INFO("generated frame written to %s", path);
+
+    /* The flow that made it: one "vx vy" pair per block, flow-resolution pixels, prev = cur + v. */
+    n = snprintf(path, sizeof path, "%s/afmf_flow_%u.txt", afmf_config_get()->dump_dir,
+                 fg->dump_frame);
+    out = n < 0 || (size_t)n >= sizeof path ? NULL : fopen(path, "w");
+    if (out == NULL) {
+        free(data);
+        return;
+    }
+    uint32_t fw = fg->flow_size[0].width, fh = fg->flow_size[0].height;
+    uint32_t lw = fg->luma_size[0].width, lh = fg->luma_size[0].height;
+    const uint8_t *base = data + (size_t)w * h * 4;
+    const int16_t *flow = (const int16_t *)(const void *)base;
+    const int16_t *raw = (const int16_t *)(const void *)(base + (size_t)fw * fh * 4);
+    const uint32_t *scd = (const uint32_t *)(const void *)(base + (size_t)fw * fh * 8);
+    const uint8_t *luma_cur = base + (size_t)fw * fh * 8 + AFMF_SCD_SLOTS * 4;
+    const uint8_t *luma_prev = luma_cur + (size_t)lw * lh;
+    (void)fprintf(out, "%u %u scd %u %u %u\n", fw, fh, scd[0], scd[1], scd[2]);
+    uint32_t moving = 0, moving_raw = 0;
+    for (uint32_t y = 0; y < fh; y++) {
+        for (uint32_t x = 0; x < fw; x++) {
+            size_t i = ((size_t)y * fw + x) * 2;
+            moving += flow[i] != 0 || flow[i + 1] != 0;
+            moving_raw += raw[i] != 0 || raw[i + 1] != 0;
+            (void)fprintf(out, "%d %d%s", flow[i], flow[i + 1], x + 1 < fw ? "  " : "\n");
+        }
+    }
+    (void)fclose(out);
+    double sum_cur = 0, sum_prev = 0;
+    uint32_t differing = 0;
+    for (size_t i = 0; i < (size_t)lw * lh; i++) {
+        sum_cur += luma_cur[i];
+        sum_prev += luma_prev[i];
+        differing += luma_cur[i] != luma_prev[i];
+    }
+    float scene_change;
+    memcpy(&scene_change, &scd[0], sizeof scene_change); /* the SDK stores the float's bits */
+    AFMF_INFO("dump %u: luma %ux%u, mean %.1f now / %.1f before, %u pixels differ; blocks moving: "
+              "%u after the filter, %u from the search; scene change %.3f, history bits %u",
+              fg->dump_frame, lw, lh, sum_cur / (double)(lw * lh), sum_prev / (double)(lw * lh),
+              differing, moving, moving_raw, (double)scene_change, scd[1]);
+    free(data);
 }
 
 /* ---- descriptor sets ----------------------------------------------------------------------- */
@@ -1439,6 +1514,8 @@ static void record_interpolate(struct afmf_device *dev, struct afmf_framegen *fg
         .fallback = afmf_config_get()->fast_motion == AFMF_RESPONSE_BLENDED_FRAMES ? 1 : 0,
         .max_motion = AFMF_MAX_TRUSTED_MOTION,
         .flow_scale = (float)fg->flow_scale,
+        /* One 8-bit level: HUD text is drawn after anti-aliasing and repeats exactly. */
+        .hud_threshold = afmf_config_get()->hud_detect ? 1.0f / 255.0f : 0.0f,
     };
     dev->fns.cmd_push_constants(cmd, pl->layouts[PASS_INTERPOLATE], VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                 (uint32_t)sizeof push, &push);
@@ -1590,21 +1667,56 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
             record_interpolate(dev, fg, cmd, slot, fg->direct_sets[p * fg->target_count + target_index],
                                fg->direct_variant);
         } else {
+            sync(dev, cmd); /* the copy engine reads what the dispatch wrote */
             copy_whole(dev, cmd, fg->output.image, VK_IMAGE_LAYOUT_GENERAL, target,
                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, fg->extent);
             profiler_mark(dev, fg, cmd, slot, STAGE_OUTPUT);
         }
 
         if (afmf_framegen_dump_pending(fg)) {
-            VkBufferImageCopy region = {
-                .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                .imageExtent = {out_w, out_h, 1},
+            VkBufferImageCopy regions[2] = {
+                {
+                    .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                    .imageExtent = {out_w, out_h, 1},
+                },
+                {
+                    .bufferOffset = (VkDeviceSize)out_w * out_h * 4u,
+                    .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                    .imageExtent = {fg->flow_size[0].width, fg->flow_size[0].height, 1},
+                },
             };
+            VkDeviceSize flow_bytes = (VkDeviceSize)fg->flow_size[0].width * fg->flow_size[0].height * 4u;
+            VkBufferImageCopy raw_region = regions[1];
+            raw_region.bufferOffset += flow_bytes;
+            VkBufferImageCopy scd_region = {
+                .bufferOffset = (VkDeviceSize)out_w * out_h * 4u + 2u * flow_bytes,
+                .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                .imageExtent = {AFMF_SCD_SLOTS, 1, 1},
+            };
+            VkBufferImageCopy luma_region = {
+                .bufferOffset = scd_region.bufferOffset + AFMF_SCD_SLOTS * 4u,
+                .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                .imageExtent = {fg->luma_size[0].width, fg->luma_size[0].height, 1},
+            };
+            VkBufferImageCopy luma_prev_region = luma_region;
+            luma_prev_region.bufferOffset +=
+                (VkDeviceSize)fg->luma_size[0].width * fg->luma_size[0].height;
             if (fg->direct)
                 sync(dev, cmd); /* the copy reads what the dispatch just wrote */
             dev->fns.cmd_copy_image_to_buffer(cmd, fg->direct ? target : fg->output.image,
-                                              VK_IMAGE_LAYOUT_GENERAL, fg->dump_buffer, 1, &region);
+                                              VK_IMAGE_LAYOUT_GENERAL, fg->dump_buffer, 1, &regions[0]);
+            dev->fns.cmd_copy_image_to_buffer(cmd, fg->flow_out.image, VK_IMAGE_LAYOUT_GENERAL,
+                                              fg->dump_buffer, 1, &regions[1]);
+            dev->fns.cmd_copy_image_to_buffer(cmd, fg->flow[flow_parity_a(p, 0)][0].image,
+                                              VK_IMAGE_LAYOUT_GENERAL, fg->dump_buffer, 1, &raw_region);
+            dev->fns.cmd_copy_image_to_buffer(cmd, fg->scd_output.image, VK_IMAGE_LAYOUT_GENERAL,
+                                              fg->dump_buffer, 1, &scd_region);
+            dev->fns.cmd_copy_image_to_buffer(cmd, fg->luma[p][0].image, VK_IMAGE_LAYOUT_GENERAL,
+                                              fg->dump_buffer, 1, &luma_region);
+            dev->fns.cmd_copy_image_to_buffer(cmd, fg->luma[1u - p][0].image, VK_IMAGE_LAYOUT_GENERAL,
+                                              fg->dump_buffer, 1, &luma_prev_region);
             fg->dump_recorded = true;
+            fg->dump_frame = fg->frame_index;
         }
     }
 

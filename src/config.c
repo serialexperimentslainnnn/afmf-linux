@@ -108,6 +108,9 @@ static void init(void)
      * rendering more than that (the driver may drop compression on them): off until measured
      * in the game at hand. */
     long direct_output = 0;
+    /* A HUD, crosshair or subtitle does not move with the scene: a pixel that is the same in
+     * both frames while its block moves is kept instead of warped. */
+    long hud_detect = 1;
 
     static const struct choice search_modes[] = {{"auto", AFMF_SEARCH_AUTO},
                                                 {"standard", AFMF_SEARCH_STANDARD},
@@ -135,6 +138,7 @@ static void init(void)
     ok = read_bounded("AFMF_MIN_FPS", 0, 240, &min_fps) && ok;
     ok = read_bounded("AFMF_STATIC_BLOCK_SAD", 0, 16320, &static_block_sad) && ok;
     ok = read_bounded("AFMF_DIRECT_OUTPUT", 0, 1, &direct_output) && ok;
+    ok = read_bounded("AFMF_HUD_DETECT", 0, 1, &hud_detect) && ok;
 
     g_config.log_level = (int)log_level;
     g_config.extra_images = (uint32_t)extra_images;
@@ -155,6 +159,7 @@ static void init(void)
     g_config.min_fps = (uint32_t)min_fps;
     g_config.static_block_sad = (uint32_t)static_block_sad;
     g_config.direct_output = direct_output != 0;
+    g_config.hud_detect = hud_detect != 0;
     g_config.invalid = !ok;
 }
 

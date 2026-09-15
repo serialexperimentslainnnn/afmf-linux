@@ -43,6 +43,7 @@ struct afmf_config {
     bool governor;               /* AFMF_GOVERNOR=0 keeps generating every frame however late the GPU runs */
     uint32_t static_block_sad;   /* AFMF_STATIC_BLOCK_SAD: a block at rest under this SAD skips the search (0 = never) */
     bool direct_output;          /* AFMF_DIRECT_OUTPUT=1: interpolate straight into the swapchain image (STORAGE usage on it) */
+    bool hud_detect;             /* AFMF_HUD_DETECT: a pixel unchanged between the frames on a moving block is kept, not warped */
     uint32_t min_fps;            /* AFMF_MIN_FPS: no companions below this real frame rate (0 = always) */
     bool invalid;                /* some variable was set but unparsable; caller reports it */
 };

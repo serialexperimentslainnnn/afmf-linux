@@ -28,6 +28,17 @@
 #define SQUARE_Y 200u
 #define SQUARE_STEP 8u
 #define SQUARE_WRAP 448u
+/* The layer dumps its companions from real frame 8 on (the flow's scene change detector reports
+ * a change for its first six frames, and the search stores zero vectors while it does). */
+#define DUMP_FIRST 8u
+/* AFMF_TEST_HUD_BAR=1: a thin red vertical bar that never moves, drawn over the square's path
+ * where the dumped frames cross it (square at x 128..216 for frames 8-11), like a crosshair over
+ * the scene: its blocks are mostly moving square, so their vectors carry the square's motion and
+ * warping would break the bar. The layer's HUD detection must keep it whole. */
+#define BAR_X 170u
+#define BAR_W 2u
+#define BAR_Y0 150u
+#define BAR_Y1 350u
 
 #define CHECK(expr)                                                                         \
     do {                                                                                    \
@@ -70,6 +81,12 @@ static int wanted_present_id(void)
 static bool wanted_present_modes(void)
 {
     const char *v = getenv("AFMF_TEST_PRESENT_MODES");
+    return v != NULL && v[0] == '1';
+}
+
+static bool wanted_hud_bar(void)
+{
+    const char *v = getenv("AFMF_TEST_HUD_BAR");
     return v != NULL && v[0] == '1';
 }
 
@@ -478,9 +495,20 @@ static void paint_frame(struct ctx *ctx, uint32_t frame)
     uint32_t w = ctx->extent.width, h = ctx->extent.height;
     memset(ctx->staging_mapped, 0, (size_t)w * h * 4u);
     uint32_t x0 = square_x(frame);
+    /* Two bright levels in a pattern that travels with the square (period 5, which 8 px of
+     * motion never lines up with), so the block search sees it move; a flat interior looks the
+     * same in both frames and the blocks come out static. Both levels count as bright. */
     for (uint32_t y = SQUARE_Y; y < SQUARE_Y + SQUARE_SIZE && y < h; y++)
         for (uint32_t x = x0; x < x0 + SQUARE_SIZE && x < w; x++)
-            memset(ctx->staging_mapped + ((size_t)y * w + x) * 4u, 0xff, 4);
+            memset(ctx->staging_mapped + ((size_t)y * w + x) * 4u,
+                   ((x - x0) * 7u + y * 13u) % 5u < 2u ? 0xa0 : 0xff, 4);
+    if (wanted_hud_bar()) {
+        /* Red in RGBA byte order (a BGRA surface shows it blue; the check accepts either). */
+        static const uint8_t red[4] = {0xff, 0x00, 0x00, 0xff};
+        for (uint32_t y = BAR_Y0; y < BAR_Y1 && y < h; y++)
+            for (uint32_t x = BAR_X; x < BAR_X + BAR_W && x < w; x++)
+                memcpy(ctx->staging_mapped + ((size_t)y * w + x) * 4u, red, 4);
+    }
 }
 
 /* Acquire, upload the synthetic frame, transition the image to PRESENT_SRC, present, then drain
@@ -709,11 +737,94 @@ static bool check_dump(const char *dir, uint32_t n)
     expected_y -= 0.5;
     bool placed = cx > expected_x - 2.0 && cx < expected_x + 2.0 && cy > expected_y - 2.0 &&
                   cy < expected_y + 2.0;
+    /* The centroid and the count cannot tell a warp from a plain blend of the two frames (a
+     * zero flow): their overlap has the same centre. The flow itself can: the square moved
+     * SQUARE_STEP to the right, so prev = cur + v gives v = (-SQUARE_STEP, 0) in flow pixels
+     * (half of it when the flow runs at half resolution) on the blocks inside it. */
     bool sized = bright > SQUARE_SIZE * SQUARE_SIZE / 2 && bright < SQUARE_SIZE * SQUARE_SIZE * 2;
-    (void)fprintf(stderr, "%s: %lu bright pixels, centroid (%.1f, %.1f), expected (%.1f, %.1f)%s\n",
-                  path, bright, cx, cy, expected_x, expected_y,
-                  placed && sized ? "" : " MISMATCH");
-    return placed && sized;
+    unsigned long inside = 0, right = 0;
+    int expected_vx = 0;
+    if (snprintf(path, sizeof path, "%s/afmf_flow_%u.txt", dir, n) < (int)sizeof path &&
+        (in = fopen(path, "r")) != NULL) {
+        unsigned fw = 0, fh = 0;
+        if (fscanf(in, "%u %u", &fw, &fh) == 2 && fw > 0 && w % fw == 0) {
+            unsigned block = w / fw; /* screen pixels per flow texel: 8, or 16 at half resolution */
+            expected_vx = -(int)(SQUARE_STEP * 8u / block);
+            int c;
+            while ((c = fgetc(in)) != '\n' && c != EOF)
+                ;
+            for (unsigned by = 0; by < fh; by++) {
+                for (unsigned bx = 0; bx < fw; bx++) {
+                    int vx = 0, vy = 0;
+                    if (fscanf(in, "%d %d", &vx, &vy) != 2)
+                        break;
+                    /* Blocks fully inside the square in both frames, one block in from its edges. */
+                    unsigned px = bx * block, py = by * block;
+                    if (px < square_x(n) + block || px + block > square_x(n - 1) + SQUARE_SIZE - block ||
+                        py < SQUARE_Y + block || py + block > SQUARE_Y + SQUARE_SIZE - block)
+                        continue;
+                    inside++;
+                    right += vx == expected_vx && vy == 0;
+                }
+            }
+        }
+        (void)fclose(in);
+    }
+    bool flowed = inside > 0 && right * 10 >= inside * 8;
+    (void)fprintf(stderr,
+                  "%s: %lu bright pixels, centroid (%.1f, %.1f), expected (%.1f, %.1f); flow (%d, 0) "
+                  "on %lu of %lu inner blocks%s\n",
+                  path, bright, cx, cy, expected_x, expected_y, expected_vx, right, inside,
+                  placed && sized && flowed ? "" : " MISMATCH");
+    return placed && sized && flowed;
+}
+
+/* Reads the layer's dump of generated frame `n` and checks that every pixel of the bar is still
+ * the bar's colour: nothing of the moving square was warped into it. */
+static bool check_bar(const char *dir, uint32_t n)
+{
+    char path[512];
+    if (snprintf(path, sizeof path, "%s/afmf_generated_%u.ppm", dir, n) >= (int)sizeof path)
+        return false;
+    FILE *in = fopen(path, "rb");
+    if (in == NULL) {
+        (void)fprintf(stderr, "no dump at %s: %s\n", path, strerror(errno));
+        return false;
+    }
+    unsigned w = 0, h = 0, maxval = 0;
+    bool ok = fscanf(in, "P6 %u %u %u", &w, &h, &maxval) == 3 && fgetc(in) == '\n' && w > 0 &&
+              h > 0 && w <= 8192 && h <= 8192;
+    unsigned long bar = 0, broken = 0, bright = 0;
+    double sum_x = 0;
+    for (unsigned y = 0; ok && y < h; y++) {
+        for (unsigned x = 0; x < w; x++) {
+            int r = fgetc(in), g = fgetc(in), b = fgetc(in);
+            if (r == EOF || g == EOF || b == EOF) {
+                ok = false;
+                break;
+            }
+            if (r > 128 && g > 128 && b > 128) {
+                sum_x += x;
+                bright++;
+            }
+            if (y < BAR_Y0 || y >= BAR_Y1 || x < BAR_X || x >= BAR_X + BAR_W)
+                continue;
+            bar++;
+            bool red = r > 128 && g < 64 && b < 64, blue = b > 128 && r < 64 && g < 64;
+            if (!red && !blue)
+                broken++;
+        }
+    }
+    (void)fclose(in);
+    if (!ok || bar == 0) {
+        (void)fprintf(stderr, "%s: unreadable\n", path);
+        return false;
+    }
+    (void)fprintf(stderr, "%s: bar %s (%lu of %lu pixels changed); square centre x %.1f, expected %.1f\n",
+                  path, broken == 0 ? "intact" : "broken", broken, bar,
+                  bright > 0 ? sum_x / (double)bright : 0.0,
+                  ((double)square_x(n - 1) + (double)square_x(n)) / 2.0 + SQUARE_SIZE / 2.0 - 0.5);
+    return broken == 0;
 }
 
 int main(void)
@@ -737,14 +848,19 @@ int main(void)
     bool ok = run(&ctx);
     destroy(&ctx);
 
-    /* Dumps 1 and 2 are the companions of real frames 1 and 2: the square must be halfway. */
+    /* The first two dumps are the companions of real frames DUMP_FIRST and the next: the square
+     * must be halfway and the flow right, or, with the bar over its path (which breaks the
+     * square's symmetry), the bar must be whole. */
     if (ok && dump_dir != NULL)
-        ok = check_dump(dump_dir, 1) && check_dump(dump_dir, 2);
+        ok = wanted_hud_bar() ? check_bar(dump_dir, DUMP_FIRST) && check_bar(dump_dir, DUMP_FIRST + 1)
+                              : check_dump(dump_dir, DUMP_FIRST) && check_dump(dump_dir, DUMP_FIRST + 1);
 
     if (ctx.validation_errors > 0) {
         (void)fprintf(stderr, "%" PRIu32 " validation error(s)\n", ctx.validation_errors);
         return EXIT_FAILURE;
     }
-    (void)fprintf(stderr, ok ? "presented %u frames through " LAYER_NAME "\n" : "failed\n", FRAMES);
+    /* "headless: FAIL" is what CTest's FAIL_REGULAR_EXPRESSION looks for: a pass regex on the
+     * layer's report alone would let a failed golden check through. */
+    (void)fprintf(stderr, ok ? "presented %u frames through " LAYER_NAME "\n" : "headless: FAIL\n", FRAMES);
     return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -151,9 +151,10 @@ Windows (search mode, performance mode, fast motion response) where such a setti
 | `AFMF_MIN_FPS` | `30` | Below this real frame rate no companion is made: doubling 25 fps is not worth its latency. `0` removes the floor |
 | `AFMF_STATIC_BLOCK_SAD` | `128` | A block whose 64 pixels differ from the previous frame's at rest by no more than this (sum of absolute 8-bit luma differences) is static: vector 0, search skipped. `0` searches every block |
 | `AFMF_DIRECT_OUTPUT` | `0` | `1` writes the interpolated frame straight into the swapchain image instead of copying it there (saves the copy, 33 us at 3440x1440), which puts storage usage on the game's swapchain images; that can cost the game's own rendering more than it saves, so measure it per game. Needs a format that takes storage writes (not sRGB) |
+| `AFMF_HUD_DETECT` | `1` | A pixel that is the same in both frames (within one 8-bit level) while its block moves is a static overlay (HUD, crosshair, subtitles): it is kept instead of warped. `0` warps everything |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_PROFILE` | `0` | `1` logs GPU time per stage every 300 frames and at teardown |
-| `AFMF_DUMP_DIR` | unset | Writes the first generated frames as PPM files into that directory (8-bit formats only) |
+| `AFMF_DUMP_DIR` | unset | Writes four generated frames (the companions of real frames 8-11, after the flow's warm-up) into that directory as `afmf_generated_<frame>.ppm`, with the block flow as `afmf_flow_<frame>.txt` (`vx vy` per block, `prev = cur + v`) and a log line with the luma and flow statistics. 8-bit formats only |
 
 Example, the settings closest to AMD's "high search, blend":
 
@@ -163,9 +164,11 @@ AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=blend <game>
 
 ## Limitations
 
-- Colour only: no depth, no motion vectors, no HUD detection. In the games measured so far it
-  looks smooth; where the flow has nothing to go on (overlays over fast motion, very thin objects,
-  scene cuts) the pixel falls back to the previous frame or a blend instead of guessing.
+- Colour only: no depth, no motion vectors. HUD detection is per pixel (unchanged between the
+  frames while its block moves), which keeps overlays whole but cannot tell one from an object
+  narrower than its own motion per frame (fast small particles): that one goes missing in the
+  generated frame. Where the flow has nothing to go on (very thin objects, scene cuts) the pixel
+  falls back to the previous frame or a blend instead of guessing.
 - Applications on Vulkan 1.0 get no interpolation (the block search needs subgroup operations);
   they run unmodified except for the extra swapchain images.
 - 32-bit applications need a 32-bit build of the layer; none is provided.

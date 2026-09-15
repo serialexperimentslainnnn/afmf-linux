@@ -49,11 +49,14 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
 void afmf_framegen_set_levels(struct afmf_framegen *fg, uint32_t levels);
 uint32_t afmf_framegen_max_levels(const struct afmf_framegen *fg);
 
-/* Debug dumps (AFMF_DUMP_DIR): afmf_framegen_record also copies the generated frame into a
- * readback buffer while `afmf_framegen_dump_pending` is true; once the submission has completed,
- * afmf_framegen_dump_write stores it as <dir>/afmf_generated_<n>.ppm and returns false when no
- * more dumps are wanted. 8-bit variants only. */
+/* Debug dumps (AFMF_DUMP_DIR): afmf_framegen_record also copies the generated frame, the flow
+ * and the luma into a readback buffer while `afmf_framegen_dump_pending` is true (the first
+ * four companions from frame 8 on, after the scene change detector's warm-up);
+ * `afmf_framegen_dump_recorded` says whether the command buffer just recorded did, and once
+ * its submission has completed afmf_framegen_dump_write stores <dir>/afmf_generated_<frame>.ppm
+ * and <dir>/afmf_flow_<frame>.txt ("vx vy" per block, prev = cur + v). 8-bit variants only. */
 bool afmf_framegen_dump_pending(const struct afmf_framegen *fg);
+bool afmf_framegen_dump_recorded(const struct afmf_framegen *fg);
 void afmf_framegen_dump_write(struct afmf_device *dev, struct afmf_framegen *fg);
 
 /* Frees the per-device pipelines; called from vkDestroyDevice. */

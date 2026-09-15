@@ -164,7 +164,7 @@ add_test(NAME headless COMMAND afmf_headless)
 set_tests_properties(headless PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf;AFMF_PERFORMANCE_MODE=quality;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
-    FAIL_REGULAR_EXPRESSION "validation error|^failed"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL"
     SKIP_RETURN_CODE 77
 )
 # Same check with the optical flow at half resolution (16-pixel blocks on screen).
@@ -172,7 +172,7 @@ add_test(NAME headless_performance COMMAND afmf_headless)
 set_tests_properties(headless_performance PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-performance;AFMF_PERFORMANCE_MODE=performance;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
-    FAIL_REGULAR_EXPRESSION "validation error|^failed"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL"
     SKIP_RETURN_CODE 77
 )
 
@@ -182,7 +182,7 @@ add_test(NAME headless_shared_queue COMMAND afmf_headless)
 set_tests_properties(headless_shared_queue PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-shared;AFMF_TEST_ALL_QUEUES=1;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
-    FAIL_REGULAR_EXPRESSION "validation error|^failed|layer queue on family|no compute queue to use"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|layer queue on family|no compute queue to use"
     SKIP_RETURN_CODE 77
 )
 
@@ -192,7 +192,7 @@ add_test(NAME headless_gamescope COMMAND afmf_headless)
 set_tests_properties(headless_gamescope PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-gamescope;AFMF_GAMESCOPE=1;AFMF_TEST_EXTRA_IMAGES=5;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
-    FAIL_REGULAR_EXPRESSION "validation error|^failed|expected at least"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|expected at least"
     SKIP_RETURN_CODE 77
 )
 
@@ -207,7 +207,7 @@ add_test(NAME headless_gamescope_passive COMMAND ${CMAKE_BINARY_DIR}/tests-as/ga
 set_tests_properties(headless_gamescope_passive PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_GAMESCOPE=1;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "pass-through \\(this process is Gamescope itself"
-    FAIL_REGULAR_EXPRESSION "validation error|^failed|generation on"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|generation on"
     SKIP_RETURN_CODE 77
 )
 
@@ -217,7 +217,7 @@ add_test(NAME headless_min_fps COMMAND afmf_headless)
 set_tests_properties(headless_min_fps PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_FRAME_MS=40;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "120 presents: 0 generated"
-    FAIL_REGULAR_EXPRESSION "validation error|^failed"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL"
     SKIP_RETURN_CODE 77
 )
 
@@ -228,7 +228,7 @@ foreach(id 1 2)
     set_tests_properties(headless_present_id${id} PROPERTIES
         ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_PRESENT_ID=${id};AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
         PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
-        FAIL_REGULAR_EXPRESSION "validation error|^failed|presenting inline"
+        FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|presenting inline"
         SKIP_RETURN_CODE 77
     )
 endforeach()
@@ -240,7 +240,7 @@ add_test(NAME headless_present_mode_auto COMMAND afmf_headless)
 set_tests_properties(headless_present_mode_auto PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_PRESENT_MODES=1;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
-    FAIL_REGULAR_EXPRESSION "validation error|^failed|present mode 2|presenting inline"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|present mode 2|presenting inline"
     SKIP_RETURN_CODE 77
 )
 # AFMF_DIRECT_OUTPUT=1: the interpolator writes the swapchain image itself (the headless surface
@@ -249,14 +249,31 @@ add_test(NAME headless_direct_output COMMAND afmf_headless)
 set_tests_properties(headless_direct_output PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DIRECT_OUTPUT=1;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-direct;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
-    FAIL_REGULAR_EXPRESSION "validation error|^failed|direct output unavailable"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|direct output unavailable"
+    SKIP_RETURN_CODE 77
+)
+# HUD detection: a bar that never moves, drawn over the moving square, must come out whole in the
+# generated frames; with the detection off the square's motion warps it (the negative control:
+# the harness must report the bar broken, or the check is not looking at anything).
+add_test(NAME headless_hud COMMAND afmf_headless)
+set_tests_properties(headless_hud PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_HUD_BAR=1;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-hud;AFMF_PERFORMANCE_MODE=quality;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|bar broken"
+    SKIP_RETURN_CODE 77
+)
+add_test(NAME headless_hud_negative COMMAND afmf_headless)
+set_tests_properties(headless_hud_negative PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_HUD_BAR=1;AFMF_HUD_DETECT=0;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-hud-off;AFMF_PERFORMANCE_MODE=quality;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "bar broken"
+    FAIL_REGULAR_EXPRESSION "validation error|bar intact"
     SKIP_RETURN_CODE 77
 )
 add_test(NAME headless_present_mode_keep COMMAND afmf_headless)
 set_tests_properties(headless_present_mode_keep PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_PRESENT_MODE=keep;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "present mode 2 \\(app asked 2\\)"
-    FAIL_REGULAR_EXPRESSION "validation error|^failed|present mode 1"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|present mode 1"
     SKIP_RETURN_CODE 77
 )
 

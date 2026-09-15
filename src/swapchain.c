@@ -1460,7 +1460,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
         sc->generated++;
 
     /* Debug dumps block on the submission; only while AFMF_DUMP_DIR asks for frames. */
-    if (generate && sc->fg != NULL && afmf_framegen_dump_pending(sc->fg)) {
+    if (generate && sc->fg != NULL && afmf_framegen_dump_recorded(sc->fg)) {
         (void)f->wait_for_fences(dev->handle, 1, &slot->fence, VK_TRUE, UINT64_MAX);
         afmf_framegen_dump_write(dev, sc->fg);
         (void)clock_gettime(CLOCK_MONOTONIC, &job.arrival); /* the pacing and the governor start after the stall */

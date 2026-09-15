@@ -20,6 +20,9 @@ All notable changes to afmf-linux are documented here. The format follows
   internal image copied there; opt-in because it needs storage usage on the game's swapchain
   images, whose cost to the game's rendering only a game measurement can tell. Test
   `headless_direct_output`.
+- `AFMF_HUD_DETECT` (on): a pixel unchanged between the two frames on a moving block is kept as
+  it is instead of warped, so a HUD, crosshair or subtitle over motion stays whole in the
+  generated frame. Tests `headless_hud` and its negative control `headless_hud_negative`.
 - `AFMF_GOVERNOR` (on by default): under GPU contention, when the generated frame is ready later
   than half the frame time three frames in a row, generation steps down (five search levels, then
   one companion in two, then one in three) and steps back up once the GPU catches up; each step is
@@ -37,6 +40,12 @@ All notable changes to afmf-linux are documented here. The format follows
   from the present call, capped at one frame after it; the profile line shows the delay as `gpu done`.
 
 ### Fixed
+- The headless golden test looked at the companions of real frames 1 and 2, which the optical
+  flow's scene change detector zeroes during its six-frame warm-up: what it measured was a
+  motionless blend of the two frames, whose centre is the same. Dumps now start at frame 8 and
+  the test also checks the flow vectors on the square (`afmf_flow_<frame>.txt`); a failed check
+  now fails the test (`FAIL_REGULAR_EXPRESSION` matched a `^` that CMake does not treat as a
+  line start).
 - The application's `vkGetSwapchainImagesKHR` is serialised with the presentation thread's presents
   (a thread-safety validation error when both ran at once).
 - The presentation thread could starve on the swapchain lock behind an application spinning in

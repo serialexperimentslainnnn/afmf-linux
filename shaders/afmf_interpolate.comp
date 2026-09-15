@@ -42,6 +42,7 @@ layout(push_constant) uniform Params {
     int fallback;        // 0 repeat previous frame, 1 blend without motion
     float max_motion;    // |v| above which the flow is not trusted, in output pixels
     float flow_scale;    // output pixels per flow-resolution pixel (1 or 2)
+    float hud_threshold; // a pixel equal in both frames within this, on a moving block, is HUD: kept as is (0 = off)
 } p;
 
 const int SCD_SCENE_CHANGE_SLOT = 0;
@@ -78,6 +79,23 @@ void main()
     bool trusted = !scene_changed && dot(v, v) <= p.max_motion * p.max_motion;
 
     vec4 colour;
+    if (trusted && p.hud_threshold > 0.0 && dot(v, v) > 0.0) {
+        // A static overlay over motion (HUD, crosshair, subtitles): the pixel itself did not
+        // change between the frames although its block moved. Warping it would drag the
+        // background's motion into the overlay; keeping it is right. A flat interior that moved
+        // meets the same test and gets the same value either way. What it cannot tell apart is
+        // an object narrower than its own motion per frame, which then goes missing in between.
+        vec4 at_cur = texture(u_cur, y * inv_size);
+        vec4 at_prev = texture(u_prev, y * inv_size);
+        vec3 diff = abs(at_cur.rgb - at_prev.rgb);
+        if (max(diff.r, max(diff.g, diff.b)) <= p.hud_threshold) {
+#if AFMF_SWAP_RB
+            at_cur = at_cur.bgra;
+#endif
+            imageStore(u_out, pix, at_cur);
+            return;
+        }
+    }
     if (trusted) {
         vec2 half_v = 0.5 * v;
         vec4 from_cur = texture(u_cur, (y - half_v) * inv_size);

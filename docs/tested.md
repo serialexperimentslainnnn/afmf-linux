@@ -22,7 +22,7 @@ Fedora 44, KDE Plasma 6.7 Wayland, Mesa 26.1.8 RADV, 3440&times;1440 at 165 Hz.
 | RX 9070 XT | Overwatch 2, Epic | DX11, DXVK, Proton-GE | 223 &rarr; **449** |
 | RX 9070 XT | Borderlands 4, Badass | DX12, vkd3d-proton (UE5), Proton-GE | **125** |
 | RX 7800 XT (RDNA3) | Cyberpunk 2077, same settings | DX12, vkd3d-proton | 60-110 &rarr; 120-220; 1.2 ms of GPU per frame, three times the 9070 XT |
-| RX 9070 XT | vkcube under Gamescope 3.16 (nested) | Vulkan, Xwayland bypass | Works; needs `AFMF_EXTRA_IMAGES=5` (Gamescope keeps more images in flight) |
+| RX 9070 XT | Cyberpunk 2077 under Gamescope 3.16 (nested, `AFMF_GAMESCOPE=1`) | DX12, vkd3d-proton, Xwayland bypass | 35,283 of 35,285 presents got a companion at 1920&times;1080; 200-215 real fps in game |
 
 ## Reported by users
 

@@ -1,6 +1,6 @@
 # Maintainer: Lain <lain@digitalexperiments.dev>
 pkgname=afmf-linux
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=1
 pkgdesc="AMD Fluid Motion Frames for Linux: Vulkan frame generation layer for any game (Proton, DXVK, native)"
 arch=('x86_64')
@@ -9,7 +9,7 @@ license=('MIT')
 depends=('vulkan-icd-loader')
 makedepends=('cmake' 'ninja' 'gcc' 'vulkan-headers' 'glslang' 'spirv-tools')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/serialexperimentslainnnn/afmf-linux/archive/v$pkgver.tar.gz")
-sha256sums=('7d19964534717d5bd2ab130f14c377adc5af67592595c47c5f5755c670f9159b')
+sha256sums=('SKIP') # set from the release tarball once the tag exists (it cannot contain its own hash)
 
 build() {
   cmake -S "$pkgname-$pkgver" -B build -G Ninja \

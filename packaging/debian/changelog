@@ -1,3 +1,11 @@
+afmf-linux (0.4.0-1) unstable; urgency=medium
+
+  * AFMF_GAMESCOPE=1 for games under Gamescope (Steam Deck): five extra swapchain images,
+    pass-through in the gamescope process itself.
+  * Verified on RDNA3 (RX 7800 XT); tested hardware and games page with user reports.
+
+ -- Lain <lain@digitalexperiments.dev>  Tue, 15 Sep 2026 20:30:00 +0200
+
 afmf-linux (0.3.0-1) unstable; urgency=medium
 
   * First public release.

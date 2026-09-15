@@ -6,6 +6,8 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-15
+
 ### Added
 - `AFMF_GAMESCOPE=1` for games under Gamescope: five extra swapchain images instead of two
   (Gamescope keeps more in flight; measured 31 % companions with two, all of them with five) and
@@ -15,6 +17,7 @@ All notable changes to afmf-linux are documented here. The format follows
   `headless_gamescope_passive`.
 - Verified on RDNA3 (RX 7800 XT): same tests, same behaviour, about three times the GPU cost per
   frame; numbers on the performance page.
+- Tested hardware and games page, with user reports (first one: NVIDIA GTX 1050 Ti, The Witcher 3).
 
 ### Changed
 - Documentation: do not stack with another frame generation layer or injector (lsfg-vk hung
@@ -70,7 +73,8 @@ First public release.
 - Headless integration test under the Khronos validation layer, vkcube smoke test, sanitizer
   build, GCC `-fanalyzer` and ShellCheck gates.
 
-[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.4.0
 [0.3.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.3.0
 [0.2.0]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/9535e06...2f442f5
 [0.1.0]: https://github.com/serialexperimentslainnnn/afmf-linux/commit/9535e06

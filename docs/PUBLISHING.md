@@ -37,8 +37,12 @@ What only the repository owner can do, in order. Everything else is in the repos
    `release` environment when asked, then publish the draft.
 4. Verify: `gh release view vX.Y.Z`, download one asset and `gpg --verify` it with
    `packaging/afmf-linux-release-key.asc`; `gh attestation verify <asset> --repo serialexperimentslainnnn/afmf-linux`.
-5. AUR (optional, your account and SSH key): copy `packaging/arch/PKGBUILD` and `.SRCINFO` into the
-   AUR clone of `afmf-linux`, update `pkgver`/`sha256sums` from the release tarball, push.
+5. AUR (your account with the SSH key registered at aur.archlinux.org → My Account). The first
+   time, `git clone ssh://aur@aur.archlinux.org/afmf-linux.git` creates the package. Then:
+   `sha256sum` of the release tarball into `packaging/arch/PKGBUILD` (`pkgver`, `sha256sums`),
+   `.SRCINFO` regenerated (`makepkg --printsrcinfo > .SRCINFO` on Arch, or by hand), commit here,
+   copy both files into the AUR clone, commit, `git push origin master`. The AUR accepts only the
+   `master` branch and those two files.
 
 ## Search presence
 

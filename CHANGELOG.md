@@ -6,6 +6,8 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-16
+
 ### Added
 - `AFMF_PRESENT_MODE` (`auto`): a swapchain created in FIFO is created in MAILBOX when the surface
   offers it, the allowed per-present modes (`VK_EXT_swapchain_maintenance1`) get MAILBOX added,
@@ -125,7 +127,8 @@ First public release.
 - Headless integration test under the Khronos validation layer, vkcube smoke test, sanitizer
   build, GCC `-fanalyzer` and ShellCheck gates.
 
-[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.5.0
 [0.4.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.4.0
 [0.3.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.3.0
 [0.2.0]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/9535e06...2f442f5

@@ -1,3 +1,15 @@
+afmf-linux (0.5.0-1) unstable; urgency=medium
+
+  * A FIFO swapchain is created in MAILBOX when the surface offers it (AFMF_PRESENT_MODE):
+    the doubled presents no longer each take a refresh slot.
+  * Static blocks skip the block search (AFMF_STATIC_BLOCK_SAD); HUD detection
+    (AFMF_HUD_DETECT); direct output into the swapchain image (AFMF_DIRECT_OUTPUT, opt-in).
+  * Governor under GPU contention (AFMF_GOVERNOR) and AFMF_MIN_FPS; pre-recorded command
+    buffers; present ids carried by the presentation thread.
+  * Fixed: the presentation thread starving on the swapchain lock; pacing after a hitch.
+
+ -- Lain <lain@digitalexperiments.dev>  Wed, 16 Sep 2026 00:17:00 +0200
+
 afmf-linux (0.4.0-1) unstable; urgency=medium
 
   * AFMF_GAMESCOPE=1 for games under Gamescope (Steam Deck): five extra swapchain images,

@@ -51,7 +51,7 @@ It works with **DirectX games under Proton** (DXVK, vkd3d-proton) and native Vul
 
 ```sh
 # Fedora
-sudo dnf install ./afmf-linux-0.4.0-1.fc44.x86_64.rpm
+sudo dnf install ./afmf-linux-0.5.0-1.fc44.x86_64.rpm
 # Steam launch options for the game
 AFMF_ENABLE=1 %command%
 ```

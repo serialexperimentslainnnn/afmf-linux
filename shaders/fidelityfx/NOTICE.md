@@ -15,8 +15,17 @@ Only the colour buffer goes in; block motion vectors (8x8, `rg16i`, `prev = cur 
 change detector come out. The host-side sequencing of the seven passes is ported to C in
 `src/framegen.c`.
 
-One local edit, every line of it marked `afmf-linux:`, in
-`opticalflow/ffx_opticalflow_compute_optical_flow_v5.h`: the block's SAD at rest (which the SDK
-already computes for its level-0 fallback) is taken before the search, and a block at or under the
-specialization constant `afmfStaticBlockSad` (`AFMF_STATIC_BLOCK_SAD`, 0 = the SDK's behaviour)
-is stored as static and skips the search. Everything else is as vendored.
+Local edits, every line of them marked `afmf-linux:`:
+
+- `opticalflow/ffx_opticalflow_compute_optical_flow_v5.h`: each block's SAD at the vector
+  predicted by the coarser level (zero at the coarsest) is taken before the search, and a block at
+  or under the specialization constant `afmfStaticBlockSad` (`AFMF_STATIC_BLOCK_SAD`, 0 = the
+  SDK's behaviour) keeps that vector and skips the search; the SDK's level-0 zero-vector fallback
+  only computes its sum at level 0.
+- `opticalflow/ffx_opticalflow_common.h`, `..._v5.h` and
+  `passes/ffx_opticalflow_compute_optical_flow_advanced_pass_v5.glsl`: with `AFMF_SAD_INT16=1`
+  (a second build of the search pass, used on devices with `shaderInt16`) the SAD runs on packed
+  16-bit byte pairs instead of one byte at a time. Without the define the SDK's code compiles
+  unchanged.
+
+Everything else is as vendored.

@@ -92,6 +92,15 @@ static bool wanted_hud_bar(void)
     return v != NULL && v[0] == '1';
 }
 
+/* AFMF_TEST_PAN=1: instead of a square on black, a textured picture that scrolls SQUARE_STEP
+ * pixels per frame across the whole frame, like a camera pan: every block moves and has to be
+ * searched, the worst case for the flow's cost, and every block's vector is known (check_pan). */
+static bool wanted_pan(void)
+{
+    const char *v = getenv("AFMF_TEST_PAN");
+    return v != NULL && v[0] == '1';
+}
+
 static bool device_extension_available(VkPhysicalDevice device, const char *name)
 {
     uint32_t n = 0;
@@ -498,6 +507,22 @@ static uint32_t square_x(uint32_t frame)
 static void paint_frame(struct ctx *ctx, uint32_t frame)
 {
     uint32_t w = ctx->extent.width, h = ctx->extent.height;
+    if (wanted_pan()) {
+        uint32_t shift = frame * SQUARE_STEP;
+        for (uint32_t y = 0; y < h; y++) {
+            uint8_t *row = ctx->staging_mapped + (size_t)y * w * 4u;
+            for (uint32_t x = 0; x < w; x++) {
+                uint32_t sx = x + shift; /* the picture scrolls to the left SQUARE_STEP px per frame */
+                uint32_t v = ((sx * 2654435761u) ^ (y * 2246822519u)) >> 24;
+                v = (v >> 2) + 32u; /* 32..95: a soft texture, not white noise */
+                row[x * 4] = (uint8_t)v;
+                row[x * 4 + 1] = (uint8_t)v;
+                row[x * 4 + 2] = (uint8_t)v;
+                row[x * 4 + 3] = 0xff;
+            }
+        }
+        return;
+    }
     memset(ctx->staging_mapped, 0, (size_t)w * h * 4u);
     uint32_t x0 = square_x(frame);
     /* Two bright levels in a pattern that travels with the square (period 5, which 8 px of
@@ -832,6 +857,49 @@ static bool check_bar(const char *dir, uint32_t n)
     return broken == 0;
 }
 
+/* With the pan every block moves by SQUARE_STEP: the dumped flow must say so on nearly all of
+ * them (the picture's edges have no match and may differ), which is what the search's
+ * prediction early-out must not break. */
+static bool check_pan(const char *dir, uint32_t n, uint32_t width)
+{
+    char path[512];
+    if (snprintf(path, sizeof path, "%s/afmf_flow_%u.txt", dir, n) >= (int)sizeof path)
+        return false;
+    FILE *in = fopen(path, "r");
+    if (in == NULL) {
+        (void)fprintf(stderr, "no flow dump at %s: %s\n", path, strerror(errno));
+        return false;
+    }
+    unsigned fw = 0, fh = 0;
+    unsigned long blocks = 0, right = 0;
+    int expected_vx = 0;
+    if (fscanf(in, "%u %u", &fw, &fh) == 2 && fw > 0 && fh > 0) {
+        /* Screen pixels per flow texel: 8, or 16 at half resolution. The picture scrolls to the
+         * left (what is at x now was at x + SQUARE_STEP before), so prev = cur + v gives +STEP. */
+        unsigned block = width / fw;
+        expected_vx = block > 0 ? (int)(SQUARE_STEP * 8u / block) : 0;
+        int c;
+        while ((c = fgetc(in)) != '\n' && c != EOF)
+            ;
+        for (unsigned by = 0; by < fh; by++) {
+            for (unsigned bx = 0; bx < fw; bx++) {
+                int vx = 0, vy = 0;
+                if (fscanf(in, "%d %d", &vx, &vy) != 2)
+                    break;
+                if (bx < 2 || bx + 2 >= fw || by < 1 || by + 1 >= fh)
+                    continue; /* the edge rows and columns: nothing to match against */
+                blocks++;
+                right += vx == expected_vx && vy == 0;
+            }
+        }
+    }
+    (void)fclose(in);
+    bool ok = blocks > 0 && right * 100 >= blocks * 95;
+    (void)fprintf(stderr, "%s: flow (%d, 0) on %lu of %lu blocks%s\n", path, expected_vx, right, blocks,
+                  ok ? "" : " MISMATCH");
+    return ok;
+}
+
 int main(void)
 {
     if (!instance_layer_available(LAYER_NAME)) {
@@ -857,8 +925,10 @@ int main(void)
      * must be halfway and the flow right, or, with the bar over its path (which breaks the
      * square's symmetry), the bar must be whole. */
     if (ok && dump_dir != NULL)
-        ok = wanted_hud_bar() ? check_bar(dump_dir, DUMP_FIRST) && check_bar(dump_dir, DUMP_FIRST + 1)
-                              : check_dump(dump_dir, DUMP_FIRST) && check_dump(dump_dir, DUMP_FIRST + 1);
+        ok = wanted_pan()       ? check_pan(dump_dir, DUMP_FIRST, ctx.extent.width) &&
+                                      check_pan(dump_dir, DUMP_FIRST + 1, ctx.extent.width)
+             : wanted_hud_bar() ? check_bar(dump_dir, DUMP_FIRST) && check_bar(dump_dir, DUMP_FIRST + 1)
+                                : check_dump(dump_dir, DUMP_FIRST) && check_dump(dump_dir, DUMP_FIRST + 1);
 
     if (ctx.validation_errors > 0) {
         (void)fprintf(stderr, "%" PRIu32 " validation error(s)\n", ctx.validation_errors);

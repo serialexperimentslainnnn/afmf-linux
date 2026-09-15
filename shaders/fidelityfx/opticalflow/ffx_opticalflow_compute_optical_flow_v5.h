@@ -43,9 +43,10 @@ FFX_GROUPSHARED FfxUInt32 sadMapBuffer[4][SearchRadiusY * 2][(SearchRadiusX * 2)
 FFX_GROUPSHARED FfxUInt32 sWaveSad[MaxWaves];
 FFX_GROUPSHARED FfxUInt32 sWaveMin[MaxWaves];
 
-// afmf-linux: a block whose 64 pixels differ from the previous frame's at rest by no more than
-// this (sum of absolute 8-bit luma differences) is static: its vector is 0 and the search is
-// skipped. 0 disables it. Set by the layer at pipeline creation (AFMF_STATIC_BLOCK_SAD).
+// afmf-linux: a block whose 64 pixels differ from the previous frame's at the predicted vector
+// (zero at the coarsest level, the coarser level's result below it) by no more than this (sum of
+// absolute 8-bit luma differences) keeps that vector and skips the search. 0 disables it. Set by
+// the layer at pipeline creation (AFMF_STATIC_BLOCK_SAD).
 #if defined(FFX_GLSL)
 layout(constant_id = 0) const FfxUInt32 afmfStaticBlockSad = 0u;
 #else
@@ -144,6 +145,33 @@ FfxUInt32x4 CalculateQSads2(FfxInt32x2 iSearchId)
     sad = msad4(pixels[7][0], FfxUInt32x2(searchBuffer[0][idx], searchBuffer[0][idx + 1]), sad);
     sad = msad4(pixels[7][1], FfxUInt32x2(searchBuffer[0][idx + 1], searchBuffer[0][idx + 2]), sad);
 
+#elif AFMF_SAD_INT16 == 1
+    // afmf-linux: the four candidates' SADs accumulated as packed 16-bit pairs over the eight
+    // rows (at most 8 x 4 x 255 per lane) and summed once at the end. The twelve bytes of a
+    // row give nine (j, j + 2) byte pairs; candidate k compares pairs k and k + 1 against the
+    // block's first word and pairs k + 4 and k + 5 against its second.
+    u16vec2 acc0 = u16vec2(0), acc1 = u16vec2(0), acc2 = u16vec2(0), acc3 = u16vec2(0);
+    for (FfxInt32 dy = 0; dy < CompareSize; dy++)
+    {
+        FfxInt32 rowOffset = (iSearchId.y + dy) * SearchBufferSizeX;
+        FfxUInt32 a0 = searchBuffer[0][rowOffset + iSearchId.x];
+        FfxUInt32 a1 = searchBuffer[0][rowOffset + iSearchId.x + 1];
+        FfxUInt32 a2 = searchBuffer[0][rowOffset + iSearchId.x + 2];
+        FfxUInt32 a01 = (a0 >> 16) | (a1 << 16);
+        FfxUInt32 a12 = (a1 >> 16) | (a2 << 16);
+        u16vec2 p0 = AfmfBytes02(a0), p1 = AfmfBytes13(a0);
+        u16vec2 p2 = AfmfBytes02(a01), p3 = AfmfBytes13(a01);
+        u16vec2 p4 = AfmfBytes02(a1), p5 = AfmfBytes13(a1);
+        u16vec2 p6 = AfmfBytes02(a12), p7 = AfmfBytes13(a12);
+        u16vec2 p8 = AfmfBytes02(a2);
+        u16vec2 b0e = AfmfBytes02(pixels[dy][0]), b0o = AfmfBytes13(pixels[dy][0]);
+        u16vec2 b1e = AfmfBytes02(pixels[dy][1]), b1o = AfmfBytes13(pixels[dy][1]);
+        acc0 += AfmfAbsDiff(p0, b0e) + AfmfAbsDiff(p1, b0o) + AfmfAbsDiff(p4, b1e) + AfmfAbsDiff(p5, b1o);
+        acc1 += AfmfAbsDiff(p1, b0e) + AfmfAbsDiff(p2, b0o) + AfmfAbsDiff(p5, b1e) + AfmfAbsDiff(p6, b1o);
+        acc2 += AfmfAbsDiff(p2, b0e) + AfmfAbsDiff(p3, b0o) + AfmfAbsDiff(p6, b1e) + AfmfAbsDiff(p7, b1o);
+        acc3 += AfmfAbsDiff(p3, b0e) + AfmfAbsDiff(p4, b0o) + AfmfAbsDiff(p7, b1e) + AfmfAbsDiff(p8, b1o);
+    }
+    sad = FfxUInt32x4(AfmfSum(acc0), AfmfSum(acc1), AfmfSum(acc2), AfmfSum(acc3));
 #else
     for (FfxInt32 dy = 0; dy < CompareSize; dy++)
     {
@@ -244,6 +272,30 @@ void ComputeOpticalFlowAdvanced(FfxInt32x2 iGlobalId, FfxInt32x2 iLocalId, FfxIn
     FfxInt32x2 ofGroupOffset = iGroupId << 1u;
     FfxInt32x2 pixelGroupOffset = iGroupId << 4u;
 
+#if FFX_LOCAL_SEARCH_FALLBACK == 1
+    // afmf-linux: the four blocks' SAD at their predicted vector (zero at the coarsest level),
+    // all at once before the loop: every lane already belongs to one block, so it loads that
+    // block's vector, compares its four pixels against the previous frame there, and one wave
+    // sum per block gives the block's SAD. A block at or under the threshold keeps its
+    // prediction and skips the 256-candidate search below. The sums are uniform across the
+    // group, so the branches in the loop are too; the barriers keep one sum's cross-wave read
+    // clear of the next one's write.
+    FfxUInt32 predictedSad[4] = {0u, 0u, 0u, 0u};
+    if (afmfStaticBlockSad != 0u)
+    {
+        FfxInt32x2 laneBlock = FfxInt32x2(iLaneToBlockId & 1, iLaneToBlockId >> 1);
+        FfxInt32x2 laneVector = bUsePredictionFromPreviousLevel ? LoadRwOpticalFlow(ofGroupOffset + laneBlock) : FfxInt32x2(0, 0);
+        FfxUInt32 laneSad = (laneVector.x != 0 || laneVector.y != 0)
+            ? Sad(packedLuma_4blocks, LoadSecondImagePackedLuma(iPxPos + laneVector))
+            : sad_4blocks;
+        for (FfxInt32 b = 0; b < 4; b++)
+        {
+            predictedSad[b] = BlockSad64(laneSad, iLocalIndex, iLaneToBlockId, b);
+            FFX_GROUP_MEMORY_BARRIER;
+        }
+    }
+#endif //FFX_LOCAL_SEARCH_FALLBACK
+
     FfxInt32x2 blockId;
     for (blockId.y = 0; blockId.y < BlockCount; blockId.y++)
     {
@@ -256,15 +308,10 @@ void ComputeOpticalFlowAdvanced(FfxInt32x2 iGlobalId, FfxInt32x2 iLocalId, FfxIn
             }
 
 #if FFX_LOCAL_SEARCH_FALLBACK == 1
-            // afmf-linux: the block's SAD at rest, once per block (the SDK computed it after the
-            // search for the level-0 fallback below); at or under the threshold the block is
-            // static and the search is skipped. The value is uniform across the group, so the
-            // branch is too; the barrier keeps the next block's wave sum off this one's read.
-            FfxUInt32 blockSadSum = BlockSad64(sad_4blocks, iLocalIndex, iLaneToBlockId, blockId.x + blockId.y * 2);
-            if (afmfStaticBlockSad != 0u && blockSadSum <= afmfStaticBlockSad)
+            // afmf-linux: the prediction already matches; nothing to search.
+            if (afmfStaticBlockSad != 0u && predictedSad[blockId.x + blockId.y * 2] <= afmfStaticBlockSad)
             {
-                StoreOpticalFlow(ofGroupOffset + blockId, FfxInt32x2(0, 0));
-                FFX_GROUP_MEMORY_BARRIER;
+                StoreOpticalFlow(ofGroupOffset + blockId, currentVector);
                 continue;
             }
 #endif //FFX_LOCAL_SEARCH_FALLBACK
@@ -285,10 +332,15 @@ void ComputeOpticalFlowAdvanced(FfxInt32x2 iGlobalId, FfxInt32x2 iLocalId, FfxIn
             FfxInt32x2 newVector = currentVector + minSadCoord;
 
 #if FFX_LOCAL_SEARCH_FALLBACK == 1
-            // afmf-linux: blockSadSum computed above, before the search.
-            if (OpticalFlowPyramidLevel() == 0 && blockSadSum <= (minSad >> 16u))
+            // afmf-linux: the zero-vector fallback only applies at level 0; the wave sum and its
+            // barrier are skipped at the six levels that never use it (the level is uniform).
+            if (OpticalFlowPyramidLevel() == 0)
             {
-                newVector = FfxInt32x2(0, 0);
+                FfxUInt32 blockSadSum = BlockSad64(sad_4blocks, iLocalIndex, iLaneToBlockId, blockId.x + blockId.y * 2);
+                if (blockSadSum <= (minSad >> 16u))
+                {
+                    newVector = FfxInt32x2(0, 0);
+                }
             }
 #endif //FFX_LOCAL_SEARCH_FALLBACK
 

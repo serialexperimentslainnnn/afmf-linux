@@ -35,6 +35,7 @@ struct afmf_instance {
     PFN_vkGetPhysicalDeviceMemoryProperties get_memory_properties;
     PFN_vkGetPhysicalDeviceQueueFamilyProperties get_queue_family_properties;
     PFN_vkGetPhysicalDeviceProperties get_properties;
+    PFN_vkGetPhysicalDeviceFeatures get_features;
     PFN_vkEnumerateDeviceExtensionProperties enumerate_device_extensions;
     struct afmf_instance *next;
 };
@@ -335,8 +336,10 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateInstance(const VkInstanceCreate
     PFN_vkEnumerateDeviceExtensionProperties enumerate_extensions =
         (PFN_vkEnumerateDeviceExtensionProperties)next_gipa(*out,
                                                             "vkEnumerateDeviceExtensionProperties");
+    PFN_vkGetPhysicalDeviceFeatures get_features =
+        (PFN_vkGetPhysicalDeviceFeatures)next_gipa(*out, "vkGetPhysicalDeviceFeatures");
     if (inst == NULL || next_destroy == NULL || get_memory == NULL || get_families == NULL ||
-        get_properties == NULL || enumerate_extensions == NULL) {
+        get_properties == NULL || enumerate_extensions == NULL || get_features == NULL) {
         if (next_destroy != NULL)
             next_destroy(*out, alloc);
         free(inst);
@@ -354,6 +357,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateInstance(const VkInstanceCreate
     inst->get_memory_properties = get_memory;
     inst->get_queue_family_properties = get_families;
     inst->get_properties = get_properties;
+    inst->get_features = get_features;
     inst->enumerate_device_extensions = enumerate_extensions;
 
     pthread_mutex_lock(&g_lock);
@@ -554,13 +558,46 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
 
     dev->storage_write_without_format =
         info->pEnabledFeatures != NULL && info->pEnabledFeatures->shaderStorageImageWriteWithoutFormat;
+    dev->shader_int16 = info->pEnabledFeatures != NULL && info->pEnabledFeatures->shaderInt16;
+    const VkPhysicalDeviceFeatures2 *app_features2 = NULL;
     for (const VkBaseInStructure *s = info->pNext; s != NULL; s = s->pNext)
-        if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
-            dev->storage_write_without_format =
-                ((const VkPhysicalDeviceFeatures2 *)s)->features.shaderStorageImageWriteWithoutFormat;
+        if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2) {
+            app_features2 = (const VkPhysicalDeviceFeatures2 *)s;
+            dev->storage_write_without_format = app_features2->features.shaderStorageImageWriteWithoutFormat;
+            dev->shader_int16 = app_features2->features.shaderInt16;
+        }
+
+    VkDeviceCreateInfo patched = *info;
+
+    /* shaderInt16 for the block search's packed SAD, when the device offers it and the
+     * application did not ask: added to its feature struct (a copy), or one of the layer's own
+     * when it enabled nothing. A VkPhysicalDeviceFeatures2 deeper in the chain than its head
+     * cannot be replaced without copying its predecessor; the search then runs the scalar SAD. */
+    VkPhysicalDeviceFeatures supported;
+    VkPhysicalDeviceFeatures features = {0};
+    VkPhysicalDeviceFeatures2 features2;
+    inst->get_features(physical_device, &supported);
+    if (!afmf_config_get()->sad_int16)
+        dev->shader_int16 = false; /* the feature may stay on; the search does not use it */
+    else if (!dev->shader_int16 && supported.shaderInt16) {
+        if (app_features2 == NULL) {
+            if (info->pEnabledFeatures != NULL)
+                features = *info->pEnabledFeatures;
+            features.shaderInt16 = VK_TRUE;
+            patched.pEnabledFeatures = &features;
+            dev->shader_int16 = true;
+        } else if ((const void *)app_features2 == info->pNext) {
+            features2 = *app_features2;
+            features2.features.shaderInt16 = VK_TRUE;
+            patched.pNext = &features2;
+            dev->shader_int16 = true;
+        } else {
+            AFMF_DEBUG("shaderInt16 not enabled by the application and its feature chain cannot be"
+                       " patched; the block search uses the scalar SAD");
+        }
+    }
 
     /* Ask for the layer's queue alongside the application's. */
-    VkDeviceCreateInfo patched = *info;
     VkDeviceQueueCreateInfo *queues = NULL;
     float *priorities = NULL;
     uint32_t async_index = 0;

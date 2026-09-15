@@ -60,10 +60,30 @@ FfxUInt32 GetPackedLuma(FfxInt32 width, FfxInt32 x, FfxUInt32 luma0, FfxUInt32 l
     return packedLuma;
 }
 
+#ifndef AFMF_SAD_INT16
+#define AFMF_SAD_INT16 0
+#endif
+#if AFMF_SAD_INT16 == 1
+// afmf-linux: the SAD on packed 16-bit pairs (two bytes per operation, v_pk_* on RDNA) instead
+// of one byte at a time: the bytes at 0 and 2 of a word form one pair, 1 and 3 the other, and
+// the difference of a pair is max - min, which needs no sign handling. Needs shaderInt16.
+u16vec2 AfmfBytes02(FfxUInt32 a) { return unpack16(a & 0x00ff00ffu); }
+u16vec2 AfmfBytes13(FfxUInt32 a) { return unpack16((a >> 8) & 0x00ff00ffu); }
+u16vec2 AfmfAbsDiff(u16vec2 a, u16vec2 b) { return max(a, b) - min(a, b); }
+FfxUInt32 AfmfSum(u16vec2 s)
+{
+    FfxUInt32 t = pack32(s);
+    return (t & 0xffffu) + (t >> 16);
+}
+#endif
+
 FfxUInt32 Sad(FfxUInt32 a, FfxUInt32 b)
 {
 #if FFX_OPTICALFLOW_USE_MSAD4_INSTRUCTION == 1
     return msad4(a, FfxUInt32x2(b, 0), FfxUInt32x4(0, 0, 0, 0)).x;
+#elif AFMF_SAD_INT16 == 1
+    return AfmfSum(AfmfAbsDiff(AfmfBytes02(a), AfmfBytes02(b)) +
+                   AfmfAbsDiff(AfmfBytes13(a), AfmfBytes13(b)));
 #else
     return abs(FfxInt32((a >> 0) & 0xffu) - FfxInt32((b >> 0) & 0xffu)) +
         abs(FfxInt32((a >> 8) & 0xffu) - FfxInt32((b >> 8) & 0xffu)) +

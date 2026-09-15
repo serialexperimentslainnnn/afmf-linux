@@ -128,6 +128,9 @@ struct afmf_device {
     /* The application enabled shaderStorageImageWriteWithoutFormat (DXVK and vkd3d-proton do):
      * the layer may then store into a B8G8R8A8 swapchain image directly. */
     bool storage_write_without_format;
+    /* shaderInt16 is on (the application's, or added by the layer when the device offers it):
+     * the block search runs its SAD on packed 16-bit pairs. */
+    bool shader_int16;
     /* The application took every queue of every compute family (vkd3d-proton asks for all four
      * of RADV's), so `async_queue` is the last one it created: its own queue-level calls on it
      * are routed through `async_lock` too (afmf_Queue* in layer.c), since a VkQueue is

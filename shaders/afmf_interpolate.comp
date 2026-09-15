@@ -85,8 +85,8 @@ void main()
         // background's motion into the overlay; keeping it is right. A flat interior that moved
         // meets the same test and gets the same value either way. What it cannot tell apart is
         // an object narrower than its own motion per frame, which then goes missing in between.
-        vec4 at_cur = texture(u_cur, y * inv_size);
-        vec4 at_prev = texture(u_prev, y * inv_size);
+        vec4 at_cur = texelFetch(u_cur, pix, 0);
+        vec4 at_prev = texelFetch(u_prev, pix, 0);
         vec3 diff = abs(at_cur.rgb - at_prev.rgb);
         if (max(diff.r, max(diff.g, diff.b)) <= p.hud_threshold) {
 #if AFMF_SWAP_RB

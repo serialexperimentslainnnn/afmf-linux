@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(afmf-linux VERSION 0.5.0 LANGUAGES C)
+project(afmf-linux VERSION 1.0.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -85,6 +85,10 @@ foreach(pass
         ffx_opticalflow_scale_optical_flow_advanced_pass_v5)
     afmf_glsl(${pass} "${AFMF_FFX_DIR}/passes/${pass}.glsl" ${AFMF_FFX_DEFINES})
 endforeach()
+# The block search once more with the SAD on packed 16-bit pairs, for devices with shaderInt16.
+afmf_glsl(ffx_opticalflow_compute_optical_flow_advanced_pass_v5_int16
+    "${AFMF_FFX_DIR}/passes/ffx_opticalflow_compute_optical_flow_advanced_pass_v5.glsl"
+    ${AFMF_FFX_DEFINES} -DAFMF_SAD_INT16=1)
 
 # The interpolator, once per output format it can write (see describe_format in src/framegen.c).
 set(AFMF_INTERP "${CMAKE_SOURCE_DIR}/shaders/afmf_interpolate.comp")
@@ -93,6 +97,13 @@ afmf_glsl(afmf_interpolate_rgba8_bgra "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgba8 -
 afmf_glsl(afmf_interpolate_rgb10a2 "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgb10_a2 -DAFMF_SWAP_RB=0)
 afmf_glsl(afmf_interpolate_rgba16f "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgba16f -DAFMF_SWAP_RB=0)
 afmf_glsl(afmf_interpolate_noformat "${AFMF_INTERP}" -DAFMF_OUT_FORMAT_NONE=1 -DAFMF_SWAP_RB=0)
+
+# The fused ingest (colour ring + luma in one read of the game's frame), once per ring format.
+set(AFMF_INGEST "${CMAKE_SOURCE_DIR}/shaders/afmf_ingest.comp")
+afmf_glsl(afmf_ingest_rgba8 "${AFMF_INGEST}" -DAFMF_OUT_FORMAT=rgba8)
+afmf_glsl(afmf_ingest_rgb10a2 "${AFMF_INGEST}" -DAFMF_OUT_FORMAT=rgb10_a2)
+afmf_glsl(afmf_ingest_rgba16f "${AFMF_INGEST}" -DAFMF_OUT_FORMAT=rgba16f)
+afmf_glsl(afmf_ingest_noformat "${AFMF_INGEST}" -DAFMF_OUT_FORMAT_NONE=1)
 
 # The half-resolution downsample for performance mode: 8-bit, or half floats for scRGB.
 set(AFMF_DOWNSAMPLE "${CMAKE_SOURCE_DIR}/shaders/afmf_downsample.comp")
@@ -270,6 +281,24 @@ set_tests_properties(headless_hud_negative PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_HUD_BAR=1;AFMF_HUD_DETECT=0;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-hud-off;AFMF_PERFORMANCE_MODE=quality;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
     PASS_REGULAR_EXPRESSION "bar broken"
     FAIL_REGULAR_EXPRESSION "validation error|bar intact"
+    SKIP_RETURN_CODE 77
+)
+# A full-frame pan: every block moves, so the search's prediction early-out (a block whose vector
+# from the coarser level already matches keeps it) must still leave (-8, 0) on nearly every block.
+add_test(NAME headless_pan COMMAND afmf_headless)
+set_tests_properties(headless_pan PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_PAN=1;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-pan;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|MISMATCH"
+    SKIP_RETURN_CODE 77
+)
+# The same pan with the SDK's byte-at-a-time SAD (AFMF_SAD_INT16=0): both SADs must agree on
+# the field, since the packed one is the default wherever shaderInt16 exists.
+add_test(NAME headless_pan_scalar_sad COMMAND afmf_headless)
+set_tests_properties(headless_pan_scalar_sad PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_PAN=1;AFMF_SAD_INT16=0;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-pan-scalar;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|MISMATCH"
     SKIP_RETURN_CODE 77
 )
 add_test(NAME headless_present_mode_keep COMMAND afmf_headless)

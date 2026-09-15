@@ -26,7 +26,7 @@ enum afmf_present_mode {
 };
 
 struct afmf_config {
-    int log_level;               /* AFMF_LOG, 0..3; default AFMF_LOG_WARN */
+    int log_level;               /* AFMF_LOG, 0..3; default AFMF_LOG_ERROR */
     uint32_t extra_images;       /* AFMF_EXTRA_IMAGES, 1..8: swapchain images added for generation */
     uint64_t acquire_timeout_ns; /* AFMF_ACQUIRE_TIMEOUT_US: how long to wait for the spare's release */
     bool interpolate;            /* AFMF_INTERPOLATE=0 falls back to repeating the previous frame */
@@ -40,10 +40,12 @@ struct afmf_config {
     bool pacing;                 /* AFMF_PACING=0 presents the real frame right behind the generated one */
     bool passive;                /* AFMF_GAMESCOPE=1 and this process is Gamescope itself: pass-through */
     enum afmf_present_mode present_mode; /* AFMF_PRESENT_MODE: auto | keep */
-    bool governor;               /* AFMF_GOVERNOR=1 steps generation down under GPU contention; off: every frame */
+    bool governor;               /* AFMF_GOVERNOR=0 keeps generating every frame however late the GPU runs */
     uint32_t static_block_sad;   /* AFMF_STATIC_BLOCK_SAD: a block at rest under this SAD skips the search (0 = never) */
     bool direct_output;          /* AFMF_DIRECT_OUTPUT=1: interpolate straight into the swapchain image (STORAGE usage on it) */
     bool hud_detect;             /* AFMF_HUD_DETECT: a pixel unchanged between the frames on a moving block is kept, not warped */
+    bool direct_ingest;          /* AFMF_DIRECT_INGEST: sample the game's frame straight into the ring and luma (SAMPLED usage) */
+    bool sad_int16;              /* AFMF_SAD_INT16=0: the block search's scalar SAD even where shaderInt16 is available */
     uint32_t min_fps;            /* AFMF_MIN_FPS: no companions below this real frame rate (0 = always) */
     bool invalid;                /* some variable was set but unparsable; caller reports it */
 };

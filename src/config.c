@@ -67,7 +67,7 @@ static bool process_is_gamescope(void)
 /* Runs under pthread_once: it must not log, because logging reads the config back. */
 static void init(void)
 {
-    long log_level = AFMF_LOG_WARN;
+    long log_level = AFMF_LOG_ERROR;
     long gamescope = 0;
     bool ok = read_bounded("AFMF_GAMESCOPE", 0, 1, &gamescope);
     /* Measured with vkcube on a 165 Hz Wayland desktop: a free image only comes back once the
@@ -82,9 +82,9 @@ static void init(void)
     long interpolate = 1;
     /* ADLX search mode: standard keeps the search to 5 pyramid levels (+-128 px), high uses all 7
      * (+-512 px); auto lets the flow resolution decide (framegen.c). */
-    long search_mode = AFMF_SEARCH_AUTO;
-    long fast_motion = AFMF_RESPONSE_REPEAT_FRAMES;
-    long performance = AFMF_PERFORMANCE_AUTO;
+    long search_mode = AFMF_SEARCH_HIGH;
+    long fast_motion = AFMF_RESPONSE_BLENDED_FRAMES;
+    long performance = AFMF_PERFORMANCE_QUALITY;
     long profile = 0;
     long async = 1;
     /* Pacing holds the real frame back by half a frame time so the generated one lands halfway,
@@ -95,10 +95,9 @@ static void init(void)
     long present_mode = AFMF_PRESENT_AUTO;
     /* Under GPU contention the generated frame is ready late and the layer's work is taken
      * from the game's budget: the governor steps generation down (fewer search levels, then one
-     * companion in two, then in three) and back up as the GPU catches up. Off by default: it
-     * trades companions for GPU headroom, a call the player makes per game. Below the minimum
-     * real frame rate doubling is not worth its latency. */
-    long governor = 0;
+     * companion in two, then in three) and back up as the GPU catches up. Below the minimum real
+     * frame rate doubling is not worth its latency. */
+    long governor = 1;
     long min_fps = 30;
     /* Sum of absolute 8-bit luma differences over a block's 64 pixels between the two frames at
      * rest; 128 is two levels per pixel on average, what temporal anti-aliasing leaves on a
@@ -112,6 +111,13 @@ static void init(void)
     /* A HUD, crosshair or subtitle does not move with the scene: a pixel that is the same in
      * both frames while its block moves is kept instead of warped. */
     long hud_detect = 1;
+    /* One read of the game's frame writes the colour ring and the luma; the copy and the SDK's
+     * luma pass go. Needs SAMPLED usage on the game's images, which costs the game nothing on
+     * RADV; AFMF_DIRECT_INGEST=0 puts the copy back for a driver where it does. */
+    long direct_ingest = 1;
+    /* The block search's SAD on packed 16-bit pairs (shaderInt16, which the layer enables on the
+     * device when the application did not); 0 keeps the SDK's byte-at-a-time code. */
+    long sad_int16 = 1;
 
     static const struct choice search_modes[] = {{"auto", AFMF_SEARCH_AUTO},
                                                 {"standard", AFMF_SEARCH_STANDARD},
@@ -140,6 +146,8 @@ static void init(void)
     ok = read_bounded("AFMF_STATIC_BLOCK_SAD", 0, 16320, &static_block_sad) && ok;
     ok = read_bounded("AFMF_DIRECT_OUTPUT", 0, 1, &direct_output) && ok;
     ok = read_bounded("AFMF_HUD_DETECT", 0, 1, &hud_detect) && ok;
+    ok = read_bounded("AFMF_DIRECT_INGEST", 0, 1, &direct_ingest) && ok;
+    ok = read_bounded("AFMF_SAD_INT16", 0, 1, &sad_int16) && ok;
 
     g_config.log_level = (int)log_level;
     g_config.extra_images = (uint32_t)extra_images;
@@ -161,6 +169,8 @@ static void init(void)
     g_config.static_block_sad = (uint32_t)static_block_sad;
     g_config.direct_output = direct_output != 0;
     g_config.hud_detect = hud_detect != 0;
+    g_config.direct_ingest = direct_ingest != 0;
+    g_config.sad_int16 = sad_int16 != 0;
     g_config.invalid = !ok;
 }
 

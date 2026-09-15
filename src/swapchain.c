@@ -28,12 +28,14 @@
 /* Governor: the generated frame ready later than this fraction of the frame time, this many
  * frames in a row, steps generation down; ready before the lower fraction for this many frames
  * steps it back up. Steps: 0 everything, 1 five search levels, 2 one companion in two, 3 in three.
- * Late means after a whole frame: a companion ready within the frame still lands before the
- * next real one, and a GPU at 100 % is the normal state of a game, not a fault. */
-#define AFMF_GOVERNOR_LATE 1.0
-#define AFMF_GOVERNOR_EARLY 0.5
-#define AFMF_GOVERNOR_LATE_FRAMES 12u
-#define AFMF_GOVERNOR_EARLY_FRAMES 20u
+ * Late means a frame and a half: the fence includes the game's own queue depth, a GPU at 100 %
+ * is the normal state of a game, and a companion ready within the frame still lands before the
+ * next real one. Half a second of lateness steps down; a quarter of a second within three
+ * quarters of a frame steps back up, so a step down costs fps for as short a time as it can. */
+#define AFMF_GOVERNOR_LATE 1.5
+#define AFMF_GOVERNOR_EARLY 0.75
+#define AFMF_GOVERNOR_LATE_FRAMES 30u
+#define AFMF_GOVERNOR_EARLY_FRAMES 15u
 #define AFMF_GOVERNOR_STEPS 3u
 
 /* One frame handed to the presentation thread: the generated image first, the real one after
@@ -81,6 +83,7 @@ struct afmf_swapchain {
     VkPresentModeKHR allowed_modes[8];
     uint32_t allowed_mode_count;
     bool storage_usage; /* the images carry STORAGE usage for direct output (AFMF_DIRECT_OUTPUT) */
+    bool sampled_usage; /* the images carry SAMPLED usage for the direct ingest (AFMF_DIRECT_INGEST) */
     uint32_t min_image_count;
 
     /* Frame generation state; everything below `gen_enabled` is unused when it is false. */
@@ -277,9 +280,8 @@ static VkResult gen_init(struct afmf_device *dev, struct afmf_swapchain *sc)
     if (res != VK_SUCCESS)
         return res;
     if (afmf_config_get()->interpolate)
-        sc->fg = afmf_framegen_create(dev, sc->format, sc->extent, sc->image_count,
-                                      sc->storage_usage ? sc->images : NULL,
-                                      sc->storage_usage ? sc->image_count : 0);
+        sc->fg = afmf_framegen_create(dev, sc->format, sc->extent, sc->image_count, sc->images,
+                                      sc->image_count, sc->storage_usage, sc->sampled_usage);
     return sc->fg != NULL ? VK_SUCCESS : create_history(dev, sc);
 }
 
@@ -566,7 +568,19 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
     bool async = false;
     bool fifo_to_mailbox = false;
     bool storage_usage = false;
+    bool sampled_usage = false;
     if (blocker == NULL) {
+        /* Direct ingest: the layer samples the game's frame straight into its colour ring and
+         * luma (one read instead of a copy and a luma pass); needs SAMPLED usage on the images. */
+        if (afmf_config_get()->direct_ingest) {
+            sampled_usage = (caps.supportedUsageFlags & VK_IMAGE_USAGE_SAMPLED_BIT) != 0 &&
+                            afmf_framegen_can_ingest_direct(dev, info->imageFormat);
+            if (sampled_usage)
+                patched.imageUsage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+            else
+                AFMF_INFO("direct ingest unavailable for format %d on this surface; copying",
+                          (int)info->imageFormat);
+        }
         /* Direct output: the interpolator writes the swapchain image, so it needs STORAGE usage;
          * only where the surface and the format take it (sRGB formats do not). */
         if (afmf_config_get()->direct_output) {
@@ -645,6 +659,7 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
     sc->present_mode = patched.presentMode;
     sc->fifo_to_mailbox = fifo_to_mailbox;
     sc->storage_usage = storage_usage;
+    sc->sampled_usage = sampled_usage;
     memcpy(sc->allowed_modes, chain_modes, chain_mode_count * sizeof *chain_modes);
     sc->allowed_mode_count = chain_mode_count;
     sc->min_image_count = info->minImageCount;
@@ -797,24 +812,27 @@ static VkResult record_frame(struct afmf_device *dev, struct afmf_swapchain *sc,
         /* The target is written by a copy (TRANSFER_DST) or, with direct output, by the
          * interpolator's stores (GENERAL). */
         bool direct = afmf_framegen_direct(sc->fg);
+        bool ingest = afmf_framegen_ingest_direct(sc->fg);
         const VkPipelineStageFlags compute = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
         VkImageLayout written = direct ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         VkAccessFlags write = direct ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT;
         VkPipelineStageFlags writer = direct ? compute : transfer;
-        image_barrier(dev, cmd, sc->images[i], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT, top,
-                      transfer);
+        /* The current image is sampled by the ingest pass (GENERAL) or read by a copy. */
+        VkImageLayout read = ingest ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        VkAccessFlags read_access = ingest ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_TRANSFER_READ_BIT;
+        VkPipelineStageFlags reader = ingest ? compute : transfer;
+        image_barrier(dev, cmd, sc->images[i], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, read, 0, read_access,
+                      top, reader);
         if (generate)
             image_barrier(dev, cmd, sc->images[j], VK_IMAGE_LAYOUT_UNDEFINED, written, 0, write, top,
                           writer);
-        afmf_framegen_record(dev, sc->fg, cmd, slot, sc->images[i],
+        afmf_framegen_record(dev, sc->fg, cmd, slot, sc->images[i], i,
                              generate ? sc->images[j] : VK_NULL_HANDLE, j);
         if (generate)
             image_barrier(dev, cmd, sc->images[j], written, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, write, 0,
                           writer, bottom);
-        image_barrier(dev, cmd, sc->images[i], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                      VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_READ_BIT, 0, transfer,
-                      bottom);
+        image_barrier(dev, cmd, sc->images[i], read, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, read_access, 0,
+                      reader, bottom);
         return dev->fns.end_command_buffer(cmd);
     }
 

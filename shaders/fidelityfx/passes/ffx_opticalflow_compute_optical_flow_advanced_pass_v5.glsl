@@ -28,6 +28,14 @@
 #define FFX_WAVE 1
 #extension GL_KHR_shader_subgroup_basic : require
 
+// afmf-linux: the packed 16-bit SAD variant (see Sad in ffx_opticalflow_common.h).
+#ifndef AFMF_SAD_INT16
+#define AFMF_SAD_INT16 0
+#endif
+#if AFMF_SAD_INT16 == 1
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#endif
+
 #define FFX_OPTICALFLOW_BIND_SRV_OPTICAL_FLOW_INPUT                0
 #define FFX_OPTICALFLOW_BIND_SRV_OPTICAL_FLOW_PREVIOUS_INPUT       1
 

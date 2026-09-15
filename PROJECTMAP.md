@@ -71,7 +71,8 @@ has no interpolation variant fall back to repeating the previous frame.
 | `AFMF_ENABLE=1` | unset | Loads the layer implicitly (manifest `enable_environment`) |
 | `DISABLE_AFMF=1` | unset | Keeps it out even if enabled |
 | `AFMF_LOG` | `1` | 0 error, 1 warn, 2 info, 3 debug (stderr) |
-| `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the app asked (1..8) |
+| `AFMF_GAMESCOPE` | unset | `1` under Gamescope: extra images default to 5, and `config.passive` (process is `gamescope` itself, `/proc/self/exe`) makes `generation_blocker` pass every swapchain through |
+| `AFMF_EXTRA_IMAGES` | `2` (`5` with `AFMF_GAMESCOPE`) | Swapchain images added beyond what the app asked (1..8) |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest wait for the spare image's release before presenting without a companion; the spare is acquired a frame ahead (`spare_*`) |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_SEARCH_MODE` | `auto` | `standard` = 5 pyramid levels, `high` = 7; `auto` = 7 at full flow resolution, 5 at half (`fg->levels`) |

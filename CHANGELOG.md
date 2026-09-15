@@ -7,6 +7,10 @@ All notable changes to afmf-linux are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `AFMF_GAMESCOPE=1` for games under Gamescope: five extra swapchain images instead of two
+  (Gamescope keeps more in flight; measured 31 % companions with two, all of them with five) and
+  pass-through in the gamescope process itself, so `AFMF_ENABLE=1 AFMF_GAMESCOPE=1 gamescope --
+  <game>` does the right thing on both sides.
 - Verified on RDNA3 (RX 7800 XT): same tests, same behaviour, about three times the GPU cost per
   frame; numbers on the performance page.
 

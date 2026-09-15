@@ -65,15 +65,28 @@ the [install guide]({{ '/install/' | relative_url }}) covers every route, includ
 Wayland, 3440&times;1440 at 165 Hz, with Monster Hunter Wilds and Cyberpunk 2077 under
 vkd3d-proton. Other GPUs and drivers: untested, reports welcome.
 
-## Measured
+## In games
 
-On the RX 9070 XT unless stated, Mesa 26.1.8, KDE Plasma Wayland, 3440&times;1440:
+<figure style="margin:1.5rem 0">
+  <img src="{{ '/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-5.jpg' | relative_url }}" alt="Cyberpunk 2077 with ray tracing on Linux: MangoHud shows 243 fps on screen with afmf-linux while the game's own counter shows 116 real frames per second" width="1920" height="804" style="width:100%;height:auto;border-radius:8px" loading="lazy">
+  <figcaption style="color:var(--muted);font-size:.9em">Cyberpunk 2077, RT Ultra, FSR 4 Quality: the game's own counter (top centre) says 116 real frames per second; MangoHud (top left) counts what reaches the screen, 243.</figcaption>
+</figure>
 
-| Game | Base (Linux, no layer) | With afmf-linux |
-|---|---|---|
-| Monster Hunter Wilds, Native AA, vkd3d-proton | 120 fps | 250 moving / 271 still |
-| Cyberpunk 2077, RT Ultra, FSR 4 Quality, vkd3d-proton | ~100-125 fps | ~200-250 |
-| Cyberpunk 2077 on an RX 7800 XT (RDNA3), same settings | ~60-110 fps | ~120-220 |
+| Game (RX 9070 XT, 3440&times;1440) | On screen with afmf-linux |
+|---|---|
+| Monster Hunter Wilds, max settings + RT, Native AA (vkd3d-proton) | **265 fps** (120 without the layer) |
+| Cyberpunk 2077, RT Ultra, FSR 4 Quality (vkd3d-proton) | **243 fps** (116 real, per the game's counter) |
+| DOOM: The Dark Ages, Ultra Nightmare, FSR Quality (native Vulkan) | **268 fps** |
+| DOOM: The Dark Ages, Ultra Nightmare, Native AA + VRS (native Vulkan) | **255 fps** |
+| Borderlands 4, Badass, FSR Quality (vkd3d-proton) | **125 fps** |
+| Cyberpunk 2077 on an RX 7800 XT (RDNA3), same settings | ~120-220 fps (60-110 real) |
+
+<div class="numbers" style="grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))">
+  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/monster-hunter-wilds-max-rt-native-aa.jpg' | relative_url }}" alt="Monster Hunter Wilds at max settings with ray tracing and Native AA on Linux, 265 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
+  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/doom-the-dark-ages-ultra-nightmare-fsr-quality.jpg' | relative_url }}" alt="DOOM: The Dark Ages at Ultra Nightmare with FSR Quality on Linux, 268 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
+  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/borderlands-4-badass-fsr-quality.jpg' | relative_url }}" alt="Borderlands 4 at Badass settings with FSR Quality on Linux, 125 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
+  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/doom-the-dark-ages-ultra-nightmare-native-aa-vrs.jpg' | relative_url }}" alt="DOOM: The Dark Ages at Ultra Nightmare with Native AA and VRS on Linux, 255 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
+</div>
 
 The ceiling is 2&times; the base the game reaches on Linux without the layer; the layer costs
 0.43 ms of GPU time per frame and about 80 &micro;s of the game's thread. Details, per-stage numbers

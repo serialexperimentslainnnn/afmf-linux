@@ -27,7 +27,12 @@ half-frame pacing AMD uses for AFMF, so the generated frames land evenly between
 KDE Plasma Wayland, 3440x1440 at 165 Hz, with Monster Hunter Wilds and Cyberpunk 2077 under
 vkd3d-proton.
 
-Developed and measured on the RX 9070 XT. In Monster Hunter Wilds (vkd3d-proton) it takes 120 real fps to ~250 on
+Developed and measured on the RX 9070 XT. On screen with the layer at 3440x1440: Monster Hunter
+Wilds max + RT Native AA **265 fps** (120 without), Cyberpunk 2077 RT Ultra FSR Quality **243**
+(116 real per the game's counter), DOOM: The Dark Ages Ultra Nightmare **268**, Borderlands 4
+Badass **125**. Screenshots and per-stage numbers on the site.
+
+[![Cyberpunk 2077 with ray tracing: 243 fps on screen with afmf-linux, 116 real per the game's counter](docs/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-5.jpg)](https://afmf-linux.digitalexperiments.dev/) In Monster Hunter Wilds (vkd3d-proton) it takes 120 real fps to ~250 on
 screen with 76-91 us of host time per frame; in Cyberpunk 2077 with ray tracing it doubles the
 base. Every frame gets a companion (26,380 of 26,381 in a session). Also verified on an RX 7800 XT
 (RDNA3): same results in the tests and in Cyberpunk 2077 (15,330 of 15,332 generated), at about

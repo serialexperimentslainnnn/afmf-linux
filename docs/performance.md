@@ -43,6 +43,12 @@ the pacing hold run on the layer's presentation thread.
 | Shared compute queue when the game holds every compute queue | GPU work off the graphics queue in vkd3d-proton titles |
 | Presentation thread with half-frame pacing | hook 546 &rarr; 80 &micro;s in game; generated frames evenly spaced |
 
+Two things learned from the screenshots' games that are worth more than a number: id Tech 8
+(DOOM) aborts if a swapchain has more than 8 images, so `AFMF_EXTRA_IMAGES` above 5 kills it
+(the default, 2, is fine); and `RADV_PERFTEST=rtcps`, which gives Cyberpunk +40 % in ray tracing,
+makes RADV crash while compiling DOOM's ray tracing pipelines. Both are per-game choices, not
+defaults.
+
 Measured and rejected: wave32 compute (no gain), native SAD instructions (unreachable from GLSL),
 writing the interpolator straight into the swapchain image (needs `STORAGE` usage on the game's
 images, which can cost the game more than the 33 &micro;s copy it saves).
@@ -53,6 +59,9 @@ images, which can cost the game more than the 33 &micro;s copy it saves).
 |---|---|---|---|
 | Monster Hunter Wilds, Native AA, max, vkd3d-proton | 120 fps | 250 moving / 271 still | 26,380 of 26,381 presents got a companion; hook 76-91 &micro;s; hold 3.7-4.3 ms |
 | Cyberpunk 2077, RT Ultra, FSR 4 Quality, game FG on (needed), vkd3d-proton | ~100-125 fps | 180-250 | `RADV_PERFTEST=rtcps` raised the base; the gap to Windows is RADV's ray tracing, not the layer |
+| DOOM: The Dark Ages, Ultra Nightmare, FSR Quality, **native Vulkan** (id Tech 8) | | 268 | The first native Vulkan title through the layer; 12,900 presents in the menu all got a companion, hook 44 &micro;s. Note: `RADV_PERFTEST=rtcps` crashes this game inside RADV's ray tracing pipeline compiler; leave it out here |
+| DOOM: The Dark Ages, Ultra Nightmare, Native AA + VRS | | 255 | |
+| Borderlands 4, Badass, FSR Quality, vkd3d-proton | ~60 fps | 125 | Unreal Engine 5 is heavy under vkd3d-proton; the layer doubles what it gets |
 | Cyberpunk 2077, same settings, **RX 7800 XT (RDNA3)**, FSR 4 in FP16 | ~60-110 fps | ~120-220 | 15,330 of 15,332 generated; hook 60-90 &micro;s; hold 4.6-7.6 ms. GPU cost 1,245 &micro;s per frame (search 700, ingest copy 148, interpolate 120, output copy 99): about 11 % of the GPU at 90 fps, against 5 % on the 9070 XT |
 
 ## RDNA3 (RX 7800 XT)

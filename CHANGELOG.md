@@ -22,6 +22,15 @@ All notable changes to afmf-linux are documented here. The format follows
 ### Fixed
 - The application's `vkGetSwapchainImagesKHR` is serialised with the presentation thread's presents
   (a thread-safety validation error when both ran at once).
+- The presentation thread could starve on the swapchain lock behind an application spinning in
+  `vkAcquireNextImageKHR` (a glibc mutex is not fair): presents stalled for seconds and no image
+  ever came free. The lock is now taken in turn, and the spare's release fence is waited on outside
+  it.
+- The pacing hold ends when the next real frame arrives, and a single hitch (a 100 ms frame) no
+  longer inflates the frame-time estimate: after one, the real frames were held up to 20 ms each,
+  images ran out and `AFMF_MIN_FPS` withheld companions for a while.
+- `AFMF_ACQUIRE_TIMEOUT_US` also bounds the acquire of the companion's image, not only its release
+  fence; frames withheld by `AFMF_MIN_FPS` are counted in the swapchain's report.
 
 ## [0.4.0] - 2026-09-15
 

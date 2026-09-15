@@ -176,7 +176,10 @@ shaders, the driver or the resolution change; review this table with every optim
   A FIFO game already at the refresh rate gets no companions (no free image, by design); mailbox
   and immediate get nearly all. Headless surfaces signal the release asynchronously, which is why
   ctest sets `AFMF_ACQUIRE_TIMEOUT_US=16000`: it checks generation, not the never-stall policy.
-- **Lock order with the presentation thread**: `wsi_lock` (swapchain) before `async_lock`
+- **Lock order with the presentation thread**: `wsi_turn` before `wsi_lock` (always through
+  `wsi_take`/`wsi_give`: the turn mutex is what stops the application's acquire loop from
+  re-taking `wsi_lock` before the thread gets it — a glibc mutex is not fair, and without it the
+  thread starved for seconds), `wsi_lock` (swapchain) before `async_lock`
   (queue); `dev->lock` before `job_lock`; the thread never takes `dev->lock` (vkDeviceWaitIdle
   drains it while holding `dev->lock`). Thread-side counters live under `job_lock`.
 - **What the thread can carry from the application's present chain**: `VkPresentIdKHR` (real frame
@@ -194,7 +197,10 @@ shaders, the driver or the resolution change; review this table with every optim
   MAILBOX/IMMEDIATE the compositor drops it whenever the presented rate exceeds the refresh rate
   (the counter doubles, the eye sees the real frames). The hold (half the EMA frame time, clamped
   0.5-20 ms, `AFMF_PACING`) is the half-frame of latency AMD documents (4-5 ms at 120 fps). A
-  FIFO game at the refresh rate still gets no companions: no free image.
+  FIFO game at the refresh rate still gets no companions: no free image. **The hold ends when the
+  next real frame arrives** (holding past it piles latency and images up), and `frame_ms_ema`
+  rises at most 2x per sample: a single hitch must not turn the following holds into 20 ms ones
+  (measured: after the test's four dump stalls, images ran out and `AFMF_MIN_FPS` tripped).
 - **Not done on purpose, with the numbers**: writing the interpolator straight into the swapchain
   image (saves the 19 us output copy) needs `STORAGE` usage on the swapchain images, which can cost
   the *game's* rendering (compression) more than 19 us on a queue that is already off its critical

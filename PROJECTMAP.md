@@ -41,8 +41,17 @@ has no interpolation variant fall back to repeating the previous frame.
 | Real-window smoke test | `tests/smoke.sh` | vkcube, implicit enable via `AFMF_ENABLE=1`, negative control |
 
 ## Structure
-- `README.md` — user documentation: build, install, usage, the configuration table, limitations.
-  Keep its table and this map's in step.
+- `README.md` — public front page (search-friendly headline, status, FAQ, configuration table).
+  Keep its table, `docs/configuration.md` and this map's in step.
+- `docs/` — GitHub Pages site (Jekyll, GitHub's plugin allowlist only, no theme, no JS):
+  `index/install/configuration/performance/faq.md`, `_layouts/default.html`,
+  `_includes/structured-data.html` (JSON-LD), `assets/`, `PUBLISHING.md` (owner's checklist).
+- `packaging/` — `build-package.sh tarball|rpm|deb|arch`, `install.sh` (tarball, user install),
+  `rpm/afmf-linux.spec`, `debian/`, `arch/PKGBUILD` + `.SRCINFO`, `check-versions.sh`,
+  `changelog-section.sh`, `release-key.sh` (creates/certifies/uploads the release key) and
+  `afmf-linux-release-key.asc` (public key only).
+- `.github/` — `workflows/ci.yml`, `workflows/release.yml`, `dependabot.yml`, issue template.
+- `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`.
 - `src/` — the layer. `layer.c` routes, `swapchain.c` behaves; nothing else knows about the loader.
 - `layer/` — manifest template.
 - `shaders/` — `afmf_interpolate.comp` (ours) and `fidelityfx/` (vendored Optical Flow: core headers,
@@ -98,6 +107,9 @@ shaders, the driver or the resolution change; review this table with every optim
 | Smoke with vkcube | `BUILD_DIR=build tests/smoke.sh` (or the `Test: smoke` IDE configuration) | 2026-09-15 |
 | Use from the build tree, any Vulkan app | `VK_ADD_IMPLICIT_LAYER_PATH=$PWD/build/layer AFMF_ENABLE=1 AFMF_LOG=2 <app>` | 2026-09-15 |
 | Install system-wide | `cmake --install build --prefix /usr/local` (then just `AFMF_ENABLE=1 <app>`) | Declared gap: not run |
+| Packaging checks (versions, changelog section, tarball) | IDE configuration `Packaging: checks` (the IDE guard refuses the scripts from the shell tool) | 2026-09-15 |
+| RPM + tarball install test | IDE configuration `Packaging: rpm + install test`, then `Packaging: uninstall + clean` | 2026-09-15 |
+| Release | `git tag -s vX.Y.Z && git push origin vX.Y.Z` after the local gates; `docs/PUBLISHING.md` | Not yet run |
 | Sanitizer build (ASan+UBSan+LSan) | `cmake -S . -B build-asan -G Ninja -DAFMF_SANITIZE=ON && cmake --build build-asan && ctest --test-dir build-asan` | 2026-09-15 |
 | Shell lint | `shellcheck -x -s bash tests/smoke.sh` | 2026-09-15 |
 | Static analysis | `cc -fanalyzer -std=gnu11 -D_POSIX_C_SOURCE=200809L -Isrc -Wall -Wextra -Werror -c src/*.c` (one file at a time) | 2026-09-15 |
@@ -192,5 +204,16 @@ shaders, the driver or the resolution change; review this table with every optim
   target must also build the layer (`EXPLICIT_BUILD_TARGET_NAME="all"`), or the manifest points at a
   `.so` that does not exist.
 
+- **`.gitignore` is an allowlist**: a new top-level file or directory must be added there or git
+  never sees it.
+- **GitHub Pages runs only its plugin allowlist** (seo-tag, sitemap, feed, remote-theme…); the site
+  cannot be built locally here (Ruby 4, no github-pages gem, the IDE guard refuses containers), so
+  the first Pages build after a push is the check. The social preview image is uploaded by hand.
+- **CI cannot run the GPU tests**; ctest/ASan/smoke are a local gate before every tag.
+- **`VK_EXT_present_timing` is `#ifdef`'d** so packages build against older headers (Ubuntu 24.04);
+  the minimum is 1.3.250, checked by CMake.
+- **The release private key is never in the tree**: `packaging/out/` is ignored and
+  `release-key.sh` shreds the export after uploading it to the `release` environment secrets.
+
 ## Out of the map
-`build*/`, `cmake-build-*/`, `.idea/`.
+`build*/`, `cmake-build-*/`, `.idea/`, `packaging/out/`, `docs/_site/`.

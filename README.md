@@ -26,8 +26,17 @@ half-frame pacing (4-5 ms of added latency at 120 fps) AMD documents for AFMF.
 Developed and measured on an RX 9070 XT (RDNA4), Mesa 26.1.8 RADV, Fedora 44, KDE Plasma Wayland,
 3440x1440 at 165 Hz. In Monster Hunter Wilds (vkd3d-proton) it takes 120 real fps to ~250 on
 screen with 76-91 us of host time per frame; in Cyberpunk 2077 with ray tracing it doubles the
-base. Every frame gets a companion (26,380 of 26,381 in a session). Other GPUs, drivers and
-compositors are untested: reports welcome, the bug template asks for what is needed.
+base. Every frame gets a companion (26,380 of 26,381 in a session). Also verified on an RX 7800 XT
+(RDNA3): same results in the tests and in Cyberpunk 2077 (15,330 of 15,332 generated), at about
+three times the GPU cost per frame (1.2 ms at 3440x1440), so the gain is smaller when the game
+already saturates the GPU. Other GPUs, drivers and compositors are untested: reports welcome, the
+bug template asks for what is needed.
+
+**Do not stack it with another frame generation layer.** Two layers generating frames on the same
+swapchain fight over the same presents. In particular, with the **lsfg-vk** implicit layer
+installed, Vulkan presentation on our RDNA3 test system hung (no window, 8 fps) even with
+afmf-linux disabled; uninstall it or set `DISABLE_LSFGVK=1` while using afmf-linux. The same goes
+for the game's own frame generation (FSR 3/4 FG, DLSS FG): turn it off.
 
 ## How it works
 
@@ -160,8 +169,9 @@ through Vulkan, which is where the layer sits. It has been measured with vkd3d-p
 **Does it need an AMD GPU?** No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image
 atomics; the tuning was done on RDNA4 with RADV. RDNA2/RDNA3, Intel and NVIDIA are untested.
 
-**Does it work with the game's own frame generation (FSR 3/4 FG, DLSS FG)?** It stacks: the layer
-doubles whatever the game presents. Turn the game's frame generation off for a fair comparison.
+**Does it work with the game's own frame generation (FSR 3/4 FG, DLSS FG) or with lsfg-vk?** It
+stacks with the game's own: the layer doubles whatever the game presents, so turn it off for a fair
+comparison. Another frame generation *layer* (lsfg-vk) is not supported: see Status.
 
 **Gamescope? HDR?** HDR10 and scRGB swapchains are interpolated (10-bit and 16-bit float
 variants). Whether the game gets HDR at all is between Wine, the compositor and Mesa, not the

@@ -12,6 +12,10 @@ faq:
     a: No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image atomics. Tuned on RDNA4 with RADV; other GPUs are untested.
   - q: Does it stack with the game's own frame generation?
     a: Yes, it doubles whatever the game presents. Turn the game's frame generation off for a fair comparison.
+  - q: Can I use it together with lsfg-vk?
+    a: No. Two frame generation layers fight over the same presents, and with the lsfg-vk implicit layer installed Vulkan presentation on our RDNA3 test system hung even with afmf-linux disabled. Uninstall lsfg-vk or set DISABLE_LSFGVK=1.
+  - q: Does it work on RDNA3?
+    a: Yes. Verified on an RX 7800 XT with the same tests and in Cyberpunk 2077, at about three times the GPU cost per frame of an RX 9070 XT (1.2 ms at 3440x1440), so the gain is smaller when the game already saturates the GPU.
   - q: Does it work with HDR?
     a: HDR10 and scRGB swapchains are interpolated. Whether the game gets HDR at all is decided between Wine, the compositor and Mesa, not by the layer.
   - q: Why is my frame rate not exactly double?

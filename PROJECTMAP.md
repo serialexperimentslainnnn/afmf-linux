@@ -92,6 +92,7 @@ shaders, the driver or the resolution change; review this table with every optim
 | 2026-09-15 | `631b0c0` + profiler | 1222 us | block search 85 % (1038 us); everything else < 40 us each | Baseline; all on the application's queue |
 | 2026-09-15 | async queue | 1222 us (unchanged) | same | Work and presents moved to the layer's compute queue (RADV family 1); headless host critical path 5.58 -> 4.82 ms median of 3 (host is upload-bound, not a game proxy) |
 | 2026-09-15 | performance mode | 493 us on the app queue (quality 1224) | search 331 us (67 %) | Flow at half resolution; golden test identical. On the compute queue the same work reads 1395 us (quality 4329) of wall time: the ACE shares the GPU with graphics and the idle host lowers clocks; the host's own frame is still shorter with async (4.24 vs 4.70 ms) |
+| 2026-09-15 | RDNA3 (RX 7800 XT) | headless 3440x1440: 1070 us (search 620); Cyberpunk: 1245 us (search 700, ingest 148, output 99), 15330/15332 generated, hook 60-90 us, real fps 61-109 in game | same code | Verified after a day of unrelated failures on that card: LACT overclock meant for the 9070 (hard hangs + MCE Bank 5), LACT leaving it at `manual` 192 MHz (8 fps), and the lsfg-vk implicit layer hanging presentation even without afmf-linux (removed). The 9070 XT was pinned to `pci-stub` for the test (no IOMMU on this boot, so vfio was not possible) |
 | 2026-09-15 | presentation thread, in game | MH Wilds Native AA, HDR10 swapchain (format 64), X11: hook **76-91 us** (record ~40, submit ~35), pacing hold 3.7-4.3 ms, 26380/26381 generated, real fps median 132 / p10 108 / min 57; MangoHud 250 moving, 271 still; three visible stutters in a session | thread: ~270 us per present, 30 us refill | Lain: "better than Windows" (his table has no Native AA row; FSR Quality was 240-280 there). GPU 507 us with `high`. The stutters are unattributed: no `no free image` on the game swapchain |
 | 2026-09-15 | presentation thread + pacing | MH Wilds (Wayland, mailbox forced): hook 546 us of which the two presents 444; vkcube after: hook 21 us (record 4, submit 9), presents on the thread | game thread: fence, spare, record, submit only | Both presents, the refill and the half-frame hold run on a thread per swapchain. Headless at 6 ms frames: hold 3.44 ms, 399/400 generated, validation (thread safety included) and ASan clean. `record 471` in the ASan+validation line is instrumentation, not the layer |
 | 2026-09-15 | shared queue, in game | MH Wilds log with the shared queue: 18199/18200 generated, 0 no free image, hook 425-719 us of which the two presents 370-630 (vkcube on the same desktop: 16 us) | present path, FIFO (mode 2) | Timers now split companion / real present / refill, and surfaces log their platform, to tell XWayland from Wayland and blit swapchains from direct ones |
@@ -194,9 +195,10 @@ shaders, the driver or the resolution change; review this table with every optim
 - **64-bit only** (`_Static_assert` in `src/layer.c`); 32-bit DXVK titles need a separate build.
 - `vkcube --validate` is not validation-clean by itself (`VUID-vkAcquireNextImageKHR-surface-07783`):
   do not add validation checks to `tests/smoke.sh`, the headless test owns that gate.
-- An installed `lsfg-vk` implicit layer in `~/.local/share/vulkan/implicit_layer.d` loads into every
-  Vulkan process and logs errors; `tests/headless.c` counts VALIDATION-type messages only for that
-  reason. Remember it when reading logs.
+- **Another frame generation layer on the same machine is a hazard**: lsfg-vk's implicit layer hung
+  presentation on RDNA3 even with afmf-linux disabled (removed from this machine on 2026-09-15).
+  `tests/headless.c` counts VALIDATION-type messages only because that layer used to log errors
+  into every process; keep the filter, other implicit layers do the same.
 - The IDE's security guard reads scripts: no `env`, `timeout`, `LD_PRELOAD` or `#!/usr/bin/env`
   shebang in anything under `tests/`, and no `->`, `//` or `/*`-leading fragments in shell one-liners.
 - CLion caches run configurations in memory: editing an XML under `.idea/runConfigurations/` while the

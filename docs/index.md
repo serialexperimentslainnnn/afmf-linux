@@ -67,6 +67,7 @@ On an RX 9070 XT, Mesa 26.1.8, KDE Plasma Wayland, 3440&times;1440:
 |---|---|---|
 | Monster Hunter Wilds, Native AA, vkd3d-proton | 120 fps | 250 moving / 271 still |
 | Cyberpunk 2077, RT Ultra, FSR 4 Quality, vkd3d-proton | ~100-125 fps | ~200-250 |
+| Cyberpunk 2077 on an RX 7800 XT (RDNA3), same settings | ~60-110 fps | ~120-220 |
 
 The ceiling is 2&times; the base the game reaches on Linux without the layer; the layer costs
 0.43 ms of GPU time per frame and about 80 &micro;s of the game's thread. Details, per-stage numbers

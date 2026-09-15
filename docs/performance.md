@@ -52,6 +52,24 @@ images, which can cost the game more than the 33 &micro;s copy it saves).
 |---|---|---|---|
 | Monster Hunter Wilds, Native AA, max, vkd3d-proton | 120 fps | 250 moving / 271 still | 26,380 of 26,381 presents got a companion; hook 76-91 &micro;s; hold 3.7-4.3 ms |
 | Cyberpunk 2077, RT Ultra, FSR 4 Quality, game FG on, vkd3d-proton | ~100-125 fps | 180-250 | `RADV_PERFTEST=rtcps` raised the base; the gap to Windows is RADV's ray tracing, not the layer |
+| Cyberpunk 2077, same settings, **RX 7800 XT (RDNA3)**, FSR 4 in FP16 | ~60-110 fps | ~120-220 | 15,330 of 15,332 generated; hook 60-90 &micro;s; hold 4.6-7.6 ms. GPU cost 1,245 &micro;s per frame (search 700, ingest copy 148, interpolate 120, output copy 99): about 11 % of the GPU at 90 fps, against 5 % on the 9070 XT |
+
+## RDNA3 (RX 7800 XT)
+
+Same code, same tests (validation, golden check in both modes, sanitizers), same behaviour in
+vkcube and in a game. What differs is the cost: at 3440&times;1440 with the flow at half
+resolution, **1,070 &micro;s** per frame in the headless test and **1,245 &micro;s** in game (7
+pyramid levels with `AFMF_SEARCH_MODE=high`), against 434 on the RX 9070 XT. The copies in and
+out of the swapchain weigh much more than on RDNA4 (148 + 99 &micro;s against 47 + 33). Use
+`AFMF_SEARCH_MODE=auto` (5 levels, about 90 &micro;s less) on this generation, and expect the 2&times;
+to fall short sooner when the game saturates the GPU.
+
+## Not compatible with other frame generation layers
+
+With the **lsfg-vk** implicit layer installed, Vulkan presentation on the RDNA3 test system hung
+(no window, 8 fps in vkcube) even with afmf-linux disabled; removing it fixed everything. Two
+layers generating frames on the same swapchain cannot both be right about which present is
+which: run one or the other.
 
 The rule that decides what you will see: the ceiling is **2&times; the base**, minus GPU
 contention when the game already saturates the GPU. A fixed cost of ~0.5 ms per frame weighs more

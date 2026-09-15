@@ -6,6 +6,14 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Verified on RDNA3 (RX 7800 XT): same tests, same behaviour, about three times the GPU cost per
+  frame; numbers on the performance page.
+
+### Changed
+- Documentation: do not stack with another frame generation layer (lsfg-vk hung presentation on
+  the RDNA3 test system even with afmf-linux disabled).
+
 ## [0.3.0] - 2026-09-15
 
 First public release.

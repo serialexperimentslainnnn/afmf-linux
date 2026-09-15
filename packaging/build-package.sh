@@ -19,11 +19,19 @@ version() {
   sed -n 's/^project(afmf-linux VERSION \([0-9.]*\).*/\1/p' "${REPO_DIR}/CMakeLists.txt"
 }
 
-# A source tarball named the way every packager expects: afmf-linux-<version>/ inside.
+# A source tarball named the way every packager expects: afmf-linux-<version>/ inside. From git
+# when there is a repository; from the working tree when actions/checkout fetched a tarball
+# because the container had no git (then there is no .git and nothing to exclude but our output).
 source_tarball() {
   local ver=$1 out=$2
-  git -C "$REPO_DIR" config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
-  git -C "$REPO_DIR" archive --format=tar.gz --prefix="afmf-linux-${ver}/" -o "$out" HEAD
+  if [[ -d ${REPO_DIR}/.git ]] && command -v git >/dev/null; then
+    git -C "$REPO_DIR" config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
+    git -C "$REPO_DIR" archive --format=tar.gz --prefix="afmf-linux-${ver}/" -o "$out" HEAD
+  else
+    tar -C "$REPO_DIR" --exclude=./packaging/out --exclude='./build*' --exclude='./cmake-build-*' \
+      --exclude=./.claudetools --exclude=./.idea --transform "s,^\./,afmf-linux-${ver}/," \
+      -czf "$out" .
+  fi
 }
 
 build_tarball() {

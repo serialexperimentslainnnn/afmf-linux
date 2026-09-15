@@ -210,6 +210,16 @@ set_tests_properties(headless_gamescope_passive PROPERTIES
     SKIP_RETURN_CODE 77
 )
 
+# Below AFMF_MIN_FPS (30 by default) no companion is made: at 25 fps the doubling is not worth
+# its latency. The governor's other steps need a starved GPU and are checked by hand.
+add_test(NAME headless_min_fps COMMAND afmf_headless)
+set_tests_properties(headless_min_fps PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_FRAME_MS=40;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "120 presents: 0 generated"
+    FAIL_REGULAR_EXPRESSION "validation error|^failed"
+    SKIP_RETURN_CODE 77
+)
+
 # Present ids (VK_KHR_present_id and present_id2, what DXVK attaches) must be carried on the
 # real frame by the presentation thread, never make the presents inline.
 foreach(id 1 2)

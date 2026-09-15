@@ -90,6 +90,15 @@ static void init(void)
     /* Pacing holds the real frame back by half a frame time so the generated one lands halfway,
      * as the driver-level implementation does (its documented 4-5 ms of added latency at 120 fps). */
     long pacing = 1;
+    /* Every present takes a vblank and the layer doubles the presents: in FIFO a game above half
+     * the refresh rate loses real frames (120 at 165 Hz -> 82). MAILBOX drops the excess instead. */
+    long present_mode = AFMF_PRESENT_AUTO;
+    /* Under GPU contention the generated frame is ready late and the layer's work is taken
+     * from the game's budget: the governor steps generation down (fewer search levels, then one
+     * companion in two, then in three) and back up as the GPU catches up. Below the minimum real
+     * frame rate doubling is not worth its latency. */
+    long governor = 1;
+    long min_fps = 30;
 
     static const struct choice search_modes[] = {{"auto", AFMF_SEARCH_AUTO},
                                                 {"standard", AFMF_SEARCH_STANDARD},
@@ -99,6 +108,8 @@ static void init(void)
     static const struct choice performance_modes[] = {{"auto", AFMF_PERFORMANCE_AUTO},
                                                      {"quality", AFMF_PERFORMANCE_QUALITY},
                                                      {"performance", AFMF_PERFORMANCE_FAST}};
+    static const struct choice present_modes[] = {{"auto", AFMF_PRESENT_AUTO},
+                                                 {"keep", AFMF_PRESENT_KEEP}};
 
     ok = read_bounded("AFMF_LOG", AFMF_LOG_ERROR, AFMF_LOG_DEBUG, &log_level) && ok;
     ok = read_bounded("AFMF_EXTRA_IMAGES", 1, 8, &extra_images) && ok;
@@ -110,6 +121,9 @@ static void init(void)
     ok = read_bounded("AFMF_ASYNC", 0, 1, &async) && ok;
     ok = read_bounded("AFMF_PACING", 0, 1, &pacing) && ok;
     ok = read_choice("AFMF_PERFORMANCE_MODE", performance_modes, 3, &performance) && ok;
+    ok = read_choice("AFMF_PRESENT_MODE", present_modes, 2, &present_mode) && ok;
+    ok = read_bounded("AFMF_GOVERNOR", 0, 1, &governor) && ok;
+    ok = read_bounded("AFMF_MIN_FPS", 0, 240, &min_fps) && ok;
 
     g_config.log_level = (int)log_level;
     g_config.extra_images = (uint32_t)extra_images;
@@ -125,6 +139,9 @@ static void init(void)
     g_config.async = async != 0;
     g_config.pacing = pacing != 0;
     g_config.passive = gamescope != 0 && process_is_gamescope();
+    g_config.present_mode = (enum afmf_present_mode)present_mode;
+    g_config.governor = governor != 0;
+    g_config.min_fps = (uint32_t)min_fps;
     g_config.invalid = !ok;
 }
 

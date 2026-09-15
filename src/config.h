@@ -20,6 +20,11 @@ enum afmf_fast_motion_response {
     AFMF_RESPONSE_BLENDED_FRAMES = 1, /* untrusted pixels blend the two frames without motion */
 };
 
+enum afmf_present_mode {
+    AFMF_PRESENT_AUTO = 0, /* FIFO becomes MAILBOX when the surface offers it */
+    AFMF_PRESENT_KEEP = 1, /* the application's present mode, untouched */
+};
+
 struct afmf_config {
     int log_level;               /* AFMF_LOG, 0..3; default AFMF_LOG_WARN */
     uint32_t extra_images;       /* AFMF_EXTRA_IMAGES, 1..8: swapchain images added for generation */
@@ -34,6 +39,9 @@ struct afmf_config {
     bool async;                  /* AFMF_ASYNC=0 keeps the work on the application's queue */
     bool pacing;                 /* AFMF_PACING=0 presents the real frame right behind the generated one */
     bool passive;                /* AFMF_GAMESCOPE=1 and this process is Gamescope itself: pass-through */
+    enum afmf_present_mode present_mode; /* AFMF_PRESENT_MODE: auto | keep */
+    bool governor;               /* AFMF_GOVERNOR=0 keeps generating every frame however late the GPU runs */
+    uint32_t min_fps;            /* AFMF_MIN_FPS: no companions below this real frame rate (0 = always) */
     bool invalid;                /* some variable was set but unparsable; caller reports it */
 };
 

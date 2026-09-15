@@ -312,7 +312,8 @@ struct afmf_framegen {
     VkExtent2D extent;
     VkExtent2D of_extent;   /* what the optical flow sees: extent, or half of it in performance mode */
     uint32_t flow_scale;    /* extent / of_extent: 1 or 2 */
-    uint32_t levels;        /* pyramid levels the search walks: 5 or 7 (AFMF_LEVELS) */
+    uint32_t levels;        /* pyramid levels the search walks now: 5..max_levels */
+    uint32_t max_levels;    /* what the configuration asked for: 5 or 7 (AFMF_LEVELS) */
     struct image color_half; /* of_extent-sized downscale of the new frame; unused when scale is 1 */
     enum half_variant half;
     VkFormat color_format; /* UNORM sibling of the swapchain format: same bytes, no sRGB decode */
@@ -1048,6 +1049,7 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
         fg->levels = 5;
     if (fg->levels > AFMF_LEVELS)
         fg->levels = AFMF_LEVELS;
+    fg->max_levels = fg->levels;
 
     const char *blocker = NULL;
     if (dev->api_version < VK_API_VERSION_1_1)
@@ -1240,6 +1242,16 @@ static void copy_whole(struct afmf_device *dev, VkCommandBuffer cmd, VkImage src
     dev->fns.cmd_copy_image(cmd, src, src_layout, dst, dst_layout, 1, &region);
 }
 
+void afmf_framegen_set_levels(struct afmf_framegen *fg, uint32_t levels)
+{
+    fg->levels = levels < 5u ? 5u : levels > fg->max_levels ? fg->max_levels : levels;
+}
+
+uint32_t afmf_framegen_max_levels(const struct afmf_framegen *fg)
+{
+    return fg->max_levels;
+}
+
 void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkCommandBuffer cmd,
                           uint32_t slot, VkImage current, VkImage target)
 {
@@ -1295,7 +1307,7 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
              AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM, AFMF_HISTOGRAM_SHIFTS, 1);
     profiler_mark(dev, fg, cmd, slot, STAGE_SCD);
 
-    for (uint32_t k = levels; k-- > 0;) {
+    for (uint32_t k = target != VK_NULL_HANDLE ? levels : 0; k-- > 0;) {
         uint32_t ofk = cb_offset(fg, slot, k);
         uint32_t luma_w = fg->luma_size[k].width, luma_h = fg->luma_size[k].height;
         dispatch(dev, cmd, pl->pipelines[PASS_SEARCH], pl->layouts[PASS_SEARCH],

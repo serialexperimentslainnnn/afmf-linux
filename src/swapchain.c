@@ -24,6 +24,14 @@
 /* Pacing delay bounds for the real frame: half the frame time, clamped. */
 #define AFMF_PACING_MIN_NS 500000ull
 #define AFMF_PACING_MAX_NS 20000000ull
+/* Governor: the generated frame ready later than this fraction of the frame time, this many
+ * frames in a row, steps generation down; ready before the lower fraction for this many frames
+ * steps it back up. Steps: 0 everything, 1 five search levels, 2 one companion in two, 3 in three. */
+#define AFMF_GOVERNOR_LATE 0.5
+#define AFMF_GOVERNOR_EARLY 0.25
+#define AFMF_GOVERNOR_LATE_FRAMES 3u
+#define AFMF_GOVERNOR_EARLY_FRAMES 60u
+#define AFMF_GOVERNOR_STEPS 3u
 
 /* One frame handed to the presentation thread: the generated image first, the real one after
  * the pacing delay, each with what the application's pNext chain carried that survives being
@@ -101,6 +109,12 @@ struct afmf_swapchain {
     double hook_ms, fence_ms, acquire_ms, record_ms, submit_ms;
     double present_ms, present_real_ms, refill_ms, hold_ms;
     double gpu_delay_ms; /* generated frame ready this long after the present call (GPU contention) */
+    double last_delay_ms; /* the latest such delay, what the governor reads */
+    /* Governor (hook side, under dev->lock with the cadence): current step and the streaks that
+     * move it. */
+    uint32_t governor_step;
+    uint32_t late_streak, early_streak;
+    uint64_t reduced_frames; /* presents that went out without a companion because of the step */
     double frame_ms_ema; /* smoothed time between the application's presents, for pacing */
 
     /* Presentation thread. Under Proton each vkQueuePresentKHR measured 170-400 us of host time
@@ -479,10 +493,11 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
 static void report_and_free(struct afmf_device *dev, struct afmf_swapchain *sc)
 {
     AFMF_INFO("swapchain %p destroyed after %" PRIu64 " presents: %" PRIu64 " generated, %" PRIu64
-              " skipped (%" PRIu64 " no free image, %" PRIu64 " no history)",
+              " skipped (%" PRIu64 " no free image, %" PRIu64 " no history, %" PRIu64
+              " held back by the governor)",
               (void *)sc->handle, sc->present_count, sc->generated,
-              sc->skipped_no_image + sc->skipped_no_history, sc->skipped_no_image,
-              sc->skipped_no_history);
+              sc->skipped_no_image + sc->skipped_no_history + sc->reduced_frames,
+              sc->skipped_no_image, sc->skipped_no_history, sc->reduced_frames);
     gen_teardown(dev, sc);
     pthread_cond_destroy(&sc->drain_cond);
     pthread_cond_destroy(&sc->job_cond);
@@ -645,9 +660,9 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
             double dt = elapsed_ms(&sc->last_present, &now);
             sc->frame_time_ms_accum += dt;
             sc->frame_time_samples++;
-            /* Smoothed for pacing: quick enough to follow a scene change, steady enough not to
-             * jitter the hold with every frame. Ignores pauses longer than the pacing cap. */
-            if (dt < 2.0 * AFMF_PACING_MAX_NS / 1e6)
+            /* Smoothed for pacing and the governor: quick enough to follow a scene change,
+             * steady enough not to jitter the hold with every frame. Ignores loading pauses. */
+            if (dt < 250.0)
                 sc->frame_ms_ema = sc->frame_ms_ema == 0.0 ? dt : 0.9 * sc->frame_ms_ema + 0.1 * dt;
         }
         sc->last_present = now;
@@ -662,13 +677,14 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
     "swapchain %p: %" PRIu64 " presents, %" PRIu64 " generated, %" PRIu64 " no free image; "    \
     "%.2f ms between presents (%.0f real fps); in the layer %.0f us per present: slot fence "   \
     "%.0f, acquire %.0f, record %.0f, submit %.0f; presentation thread: present generated "   \
-    "%.0f, present real %.0f, refill %.0f, gpu done +%.2f ms, pacing hold %.2f ms"
+    "%.0f, present real %.0f, refill %.0f, gpu done +%.2f ms, pacing hold %.2f ms; governor "    \
+    "step %u"
 #define STATS_ARGS                                                                                \
     (void *)sc->handle, sc->present_count, sc->generated, sc->skipped_no_image, frame_ms,       \
         1e3 / frame_ms, 1e3 * sc->hook_ms / n, 1e3 * sc->fence_ms / n, 1e3 * sc->acquire_ms / n, \
         1e3 * sc->record_ms / n, 1e3 * sc->submit_ms / n, 1e3 * sc->present_ms / n,             \
         1e3 * sc->present_real_ms / n, 1e3 * sc->refill_ms / n, sc->gpu_delay_ms / n,           \
-        sc->hold_ms / n
+        sc->hold_ms / n, sc->governor_step
         pthread_mutex_lock(&sc->job_lock); /* the presentation thread's counters */
         if (afmf_config_get()->profile)
             AFMF_INFO(STATS_LINE, STATS_ARGS);
@@ -683,6 +699,52 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
         sc->hook_ms = sc->fence_ms = sc->acquire_ms = sc->record_ms = sc->submit_ms = 0.0;
     }
     pthread_mutex_unlock(&dev->lock);
+}
+
+/* Whether this present gets a companion, after the governor has looked at how late the last
+ * generated frame was ready and at the real frame rate. Called with dev->lock held. */
+static bool governor_allows(struct afmf_swapchain *sc, double last_delay_ms)
+{
+    const struct afmf_config *cfg = afmf_config_get();
+    double frame_ms = sc->frame_ms_ema;
+    if (cfg->min_fps > 0 && frame_ms > 0.0 && frame_ms > 1e3 / cfg->min_fps)
+        return false;
+    if (!cfg->governor || frame_ms <= 0.0)
+        return true;
+
+    double ratio = last_delay_ms / frame_ms;
+    uint32_t before = sc->governor_step;
+    if (ratio > AFMF_GOVERNOR_LATE) {
+        sc->early_streak = 0;
+        if (++sc->late_streak >= AFMF_GOVERNOR_LATE_FRAMES && sc->governor_step < AFMF_GOVERNOR_STEPS) {
+            sc->governor_step++;
+            sc->late_streak = 0;
+        }
+    } else if (ratio < AFMF_GOVERNOR_EARLY) {
+        sc->late_streak = 0;
+        if (++sc->early_streak >= AFMF_GOVERNOR_EARLY_FRAMES && sc->governor_step > 0) {
+            sc->governor_step--;
+            sc->early_streak = 0;
+        }
+    }
+    if (sc->governor_step != before) {
+        if (sc->fg != NULL)
+            afmf_framegen_set_levels(sc->fg, sc->governor_step >= 1 ? 5u
+                                                                    : afmf_framegen_max_levels(sc->fg));
+        AFMF_INFO("swapchain %p: governor step %u (generated frame ready %.0f%% into the frame): %s",
+                  (void *)sc->handle, sc->governor_step, 100.0 * ratio,
+                  sc->governor_step == 0   ? "every frame, full search"
+                  : sc->governor_step == 1 ? "every frame, five search levels"
+                  : sc->governor_step == 2 ? "one companion in two"
+                                           : "one companion in three");
+    }
+    /* Step 2 and 3 thin the companions out; the reduced frames still enter the history. */
+    uint64_t every = sc->governor_step >= 2 ? sc->governor_step : 1;
+    if (sc->present_count % every != 0) {
+        sc->reduced_frames++;
+        return false;
+    }
+    return true;
 }
 
 /* Acquires the spare when there is none, without waiting. */
@@ -847,6 +909,7 @@ static void *presenter_main(void *arg)
                 timespec_add_ns(&until, hold);
                 pthread_mutex_lock(&sc->job_lock);
                 sc->gpu_delay_ms += delay_ms;
+                sc->last_delay_ms = delay_ms;
                 sc->hold_ms += (double)hold / 1e6;
                 while (!sc->presenter_stop &&
                        pthread_cond_timedwait(&sc->job_cond, &sc->job_lock, &until) != ETIMEDOUT)
@@ -1077,9 +1140,15 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
      * for us; otherwise this frame simply gets no companion, the application never waits. */
     bool generate = false;
     uint32_t j = 0;
+    pthread_mutex_lock(&sc->job_lock);
+    double last_delay_ms = sc->last_delay_ms;
+    pthread_mutex_unlock(&sc->job_lock);
+    pthread_mutex_lock(&dev->lock);
+    bool allowed = governor_allows(sc, last_delay_ms);
+    pthread_mutex_unlock(&dev->lock);
     if (!sc->have_history) {
         sc->skipped_no_history++;
-    } else {
+    } else if (allowed) {
         pthread_mutex_lock(&sc->wsi_lock);
         generate = spare_take(dev, sc, &j);
         pthread_mutex_unlock(&sc->wsi_lock);

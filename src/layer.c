@@ -314,6 +314,11 @@ static bool load_device_fns(struct afmf_device *dev, PFN_vkGetDeviceProcAddr nex
     LOAD_DEVICE_FN(cmd_push_constants, vkCmdPushConstants);
     LOAD_DEVICE_FN(cmd_clear_color_image, vkCmdClearColorImage);
     LOAD_DEVICE_FN(cmd_copy_image_to_buffer, vkCmdCopyImageToBuffer);
+    LOAD_DEVICE_FN(create_query_pool, vkCreateQueryPool);
+    LOAD_DEVICE_FN(destroy_query_pool, vkDestroyQueryPool);
+    LOAD_DEVICE_FN(cmd_reset_query_pool, vkCmdResetQueryPool);
+    LOAD_DEVICE_FN(cmd_write_timestamp, vkCmdWriteTimestamp);
+    LOAD_DEVICE_FN(get_query_pool_results, vkGetQueryPoolResults);
     /* NULL when VK_KHR_swapchain is not enabled: the hooks are then never handed out (see GDPA). */
     LOAD_DEVICE_FN(create_swapchain, vkCreateSwapchainKHR);
     LOAD_DEVICE_FN(destroy_swapchain, vkDestroySwapchainKHR);
@@ -338,7 +343,9 @@ static bool load_device_fns(struct afmf_device *dev, PFN_vkGetDeviceProcAddr nex
            f->destroy_buffer && f->get_buffer_memory_requirements && f->bind_buffer_memory &&
            f->map_memory && f->unmap_memory && f->cmd_bind_pipeline &&
            f->cmd_bind_descriptor_sets && f->cmd_dispatch && f->cmd_push_constants &&
-           f->cmd_clear_color_image && f->cmd_copy_image_to_buffer;
+           f->cmd_clear_color_image && f->cmd_copy_image_to_buffer && f->create_query_pool &&
+           f->destroy_query_pool && f->cmd_reset_query_pool && f->cmd_write_timestamp &&
+           f->get_query_pool_results;
 }
 
 static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physical_device,

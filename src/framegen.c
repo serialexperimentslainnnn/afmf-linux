@@ -19,6 +19,28 @@
 
 #define AFMF_FLOW_BLOCK 8u
 #define AFMF_DUMP_FRAMES 4u
+#define AFMF_PROFILE_QUERIES 32u  /* timestamps per slot: one at start, one after each stage */
+#define AFMF_PROFILE_INTERVAL 300u
+
+/* Profiling stages (AFMF_PROFILE=1): GPU time between consecutive timestamps is attributed to
+ * the stage that ended at the second one; the search/filter/scale of all levels add up. */
+enum stage {
+    STAGE_INGEST,
+    STAGE_PREPARE,
+    STAGE_PYRAMID,
+    STAGE_SCD,
+    STAGE_SEARCH,
+    STAGE_FILTER,
+    STAGE_SCALE,
+    STAGE_INTERPOLATE,
+    STAGE_OUTPUT,
+    STAGE_COUNT
+};
+
+static const char *const stage_names[STAGE_COUNT] = {
+    "ingest copy", "prepare luma", "luma pyramid", "scene change detector", "search (all levels)",
+    "filter (all levels)", "scale (all levels)", "interpolate", "output copy",
+};
 #define AFMF_LEVELS 7u
 #define AFMF_HISTOGRAM_BINS 256u
 #define AFMF_HISTOGRAMS_PER_DIM 3u
@@ -282,6 +304,14 @@ struct afmf_framegen {
 
     bool initialized; /* layouts transitioned and detector cleared in a command buffer */
     uint32_t frame_index;
+
+    /* GPU timestamps per stage (AFMF_PROFILE=1). One query range per slot; a slot's results are
+     * read back when the slot is reused, i.e. after its fence, so it never blocks. */
+    VkQueryPool queries;
+    uint32_t *query_count;  /* per slot: timestamps written last time */
+    uint8_t *query_stage;   /* per slot x AFMF_PROFILE_QUERIES: stage each timestamp closes */
+    double stage_ns[STAGE_COUNT];
+    uint32_t profiled_frames;
 
     /* Debug readback of generated frames, only when AFMF_DUMP_DIR is set (8-bit variants). */
     VkBuffer dump_buffer;
@@ -579,6 +609,97 @@ static void dump_buffer_create(struct afmf_device *dev, struct afmf_framegen *fg
     fg->dump_mapped = mapped;
 }
 
+/* ---- profiling ----------------------------------------------------------------------------- */
+
+static void profiler_create(struct afmf_device *dev, struct afmf_framegen *fg)
+{
+    if (!afmf_config_get()->profile)
+        return;
+    if (!dev->limits.timestampComputeAndGraphics || dev->limits.timestampPeriod <= 0.0f) {
+        AFMF_WARN("profiling requested but the device has no timestamps on compute queues");
+        return;
+    }
+    VkQueryPoolCreateInfo pool = {
+        .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+        .queryType = VK_QUERY_TYPE_TIMESTAMP,
+        .queryCount = AFMF_PROFILE_QUERIES * fg->slots,
+    };
+    fg->query_count = calloc(fg->slots, sizeof *fg->query_count);
+    fg->query_stage = calloc((size_t)fg->slots * AFMF_PROFILE_QUERIES, sizeof *fg->query_stage);
+    if (fg->query_count == NULL || fg->query_stage == NULL ||
+        dev->fns.create_query_pool(dev->handle, &pool, NULL, &fg->queries) != VK_SUCCESS) {
+        AFMF_WARN("profiling unavailable: query pool creation failed");
+        fg->queries = VK_NULL_HANDLE;
+    }
+}
+
+/* Reads the timestamps a slot wrote the last time it ran and folds them into the stage totals.
+ * Called once the slot's fence has been waited on, so the results are complete. */
+static void profiler_collect(struct afmf_device *dev, struct afmf_framegen *fg, uint32_t slot)
+{
+    uint32_t count = fg->query_count[slot];
+    fg->query_count[slot] = 0; /* consumed: never folded in twice */
+    if (count < 2)
+        return;
+    uint64_t ticks[AFMF_PROFILE_QUERIES];
+    VkResult res = dev->fns.get_query_pool_results(dev->handle, fg->queries,
+                                                   slot * AFMF_PROFILE_QUERIES, count, sizeof ticks,
+                                                   ticks, sizeof ticks[0], VK_QUERY_RESULT_64_BIT);
+    if (res != VK_SUCCESS)
+        return;
+    const uint8_t *stages = fg->query_stage + (size_t)slot * AFMF_PROFILE_QUERIES;
+    for (uint32_t i = 1; i < count; i++)
+        fg->stage_ns[stages[i]] += (double)(ticks[i] - ticks[i - 1]) * (double)dev->limits.timestampPeriod;
+    fg->profiled_frames++;
+}
+
+static void profiler_report(struct afmf_framegen *fg)
+{
+    if (fg->profiled_frames == 0)
+        return;
+    double total = 0.0;
+    for (uint32_t s = 0; s < STAGE_COUNT; s++)
+        total += fg->stage_ns[s];
+    AFMF_INFO("GPU time per frame over %u frames at %ux%u: %.0f us total", fg->profiled_frames,
+              fg->extent.width, fg->extent.height, total / fg->profiled_frames / 1e3);
+    for (uint32_t s = 0; s < STAGE_COUNT; s++) {
+        AFMF_INFO("  %-24s %7.0f us  %5.1f%%", stage_names[s],
+                  fg->stage_ns[s] / fg->profiled_frames / 1e3,
+                  total > 0.0 ? 100.0 * fg->stage_ns[s] / total : 0.0);
+        fg->stage_ns[s] = 0.0;
+    }
+    fg->profiled_frames = 0;
+}
+
+/* Writes the timestamp that closes `stage`; a no-op without profiling. */
+static void profiler_mark(struct afmf_device *dev, struct afmf_framegen *fg, VkCommandBuffer cmd,
+                          uint32_t slot, enum stage stage)
+{
+    if (fg->queries == VK_NULL_HANDLE)
+        return;
+    uint32_t *count = &fg->query_count[slot];
+    if (*count >= AFMF_PROFILE_QUERIES)
+        return;
+    fg->query_stage[(size_t)slot * AFMF_PROFILE_QUERIES + *count] = (uint8_t)stage;
+    dev->fns.cmd_write_timestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, fg->queries,
+                                 slot * AFMF_PROFILE_QUERIES + *count);
+    (*count)++;
+}
+
+static void profiler_begin(struct afmf_device *dev, struct afmf_framegen *fg, VkCommandBuffer cmd,
+                           uint32_t slot)
+{
+    if (fg->queries == VK_NULL_HANDLE)
+        return;
+    profiler_collect(dev, fg, slot);
+    if (fg->profiled_frames >= AFMF_PROFILE_INTERVAL)
+        profiler_report(fg);
+    dev->fns.cmd_reset_query_pool(cmd, fg->queries, slot * AFMF_PROFILE_QUERIES,
+                                  AFMF_PROFILE_QUERIES);
+    fg->query_count[slot] = 0;
+    profiler_mark(dev, fg, cmd, slot, STAGE_INGEST); /* the opening timestamp; stage unused */
+}
+
 bool afmf_framegen_dump_pending(const struct afmf_framegen *fg)
 {
     return fg->dump_mapped != NULL && fg->dumps_written < AFMF_DUMP_FRAMES;
@@ -804,6 +925,15 @@ void afmf_framegen_destroy(struct afmf_device *dev, struct afmf_framegen *fg)
         return;
     if (fg->pool != VK_NULL_HANDLE)
         dev->fns.destroy_descriptor_pool(dev->handle, fg->pool, NULL); /* frees the sets */
+    if (fg->queries != VK_NULL_HANDLE) {
+        /* The caller has waited for every slot; fold the last results in and report. */
+        for (uint32_t s = 0; s < fg->slots; s++)
+            profiler_collect(dev, fg, s);
+        profiler_report(fg);
+        dev->fns.destroy_query_pool(dev->handle, fg->queries, NULL);
+    }
+    free(fg->query_count);
+    free(fg->query_stage);
     if (fg->dump_mapped != NULL)
         dev->fns.unmap_memory(dev->handle, fg->dump_memory);
     if (fg->dump_buffer != VK_NULL_HANDLE)
@@ -865,8 +995,10 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
             res = descriptor_sets_create(dev, fg);
         if (res != VK_SUCCESS)
             blocker = "resource creation failed";
-        else
+        else {
             dump_buffer_create(dev, fg);
+            profiler_create(dev, fg);
+        }
     }
     if (blocker != NULL) {
         AFMF_WARN("interpolation unavailable for this swapchain: %s (VkResult %d); repeating frames",
@@ -1018,20 +1150,24 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
     /* The previous frame's work on this queue may still be reading the ring image about to be
      * overwritten: order it before anything below. */
     sync(dev, cmd);
+    profiler_begin(dev, fg, cmd, slot);
 
     /* 1. The new frame into the colour ring. */
     copy_whole(dev, cmd, current, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fg->color[p].image,
                VK_IMAGE_LAYOUT_GENERAL, fg->extent);
     sync(dev, cmd);
+    profiler_mark(dev, fg, cmd, slot, STAGE_INGEST);
 
     /* 2. Optical flow: luma, pyramid, scene change detector, then coarse-to-fine search. */
     uint32_t of0 = cb_offset(fg, slot, 0);
     dispatch(dev, cmd, pl->pipelines[PASS_PREPARE_LUMA], pl->layouts[PASS_PREPARE_LUMA],
              fg->sets[p][SET_PREPARE], &of0, 1, ((w + 1) / 2 + 15) / 16, ((h + 1) / 2 + 15) / 16, 1);
+    profiler_mark(dev, fg, cmd, slot, STAGE_PREPARE);
 
     uint32_t pyramid_offsets[2] = {of0, cb_offset(fg, slot, AFMF_LEVELS)};
     dispatch(dev, cmd, pl->pipelines[PASS_PYRAMID], pl->layouts[PASS_PYRAMID],
              fg->sets[p][SET_PYRAMID], pyramid_offsets, 2, (w - 1) / 64 + 1, (h - 1) / 64 + 1, 1);
+    profiler_mark(dev, fg, cmd, slot, STAGE_PYRAMID);
 
     uint32_t strata_width = (w / 4) / AFMF_HISTOGRAMS_PER_DIM;
     dispatch(dev, cmd, pl->pipelines[PASS_SCD_HISTOGRAM], pl->layouts[PASS_SCD_HISTOGRAM],
@@ -1040,6 +1176,7 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
     dispatch(dev, cmd, pl->pipelines[PASS_SCD_DIVERGENCE], pl->layouts[PASS_SCD_DIVERGENCE],
              fg->sets[p][SET_SCD_DIVERGENCE], &of0, 1,
              AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM, AFMF_HISTOGRAM_SHIFTS, 1);
+    profiler_mark(dev, fg, cmd, slot, STAGE_SCD);
 
     for (uint32_t k = levels; k-- > 0;) {
         uint32_t ofk = cb_offset(fg, slot, k);
@@ -1047,13 +1184,16 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
         dispatch(dev, cmd, pl->pipelines[PASS_SEARCH], pl->layouts[PASS_SEARCH],
                  fg->sets[p][SET_SEARCH + k], &ofk, 1, ((luma_w + 3) / 4 * 16 + 63) / 64,
                  (luma_h + 15) / 16, 1);
+        profiler_mark(dev, fg, cmd, slot, STAGE_SEARCH);
         dispatch(dev, cmd, pl->pipelines[PASS_FILTER], pl->layouts[PASS_FILTER],
                  fg->sets[p][SET_FILTER + k], &ofk, 1, (fg->flow_size[k].width + 15) / 16,
                  (fg->flow_size[k].height + 3) / 4, 1);
+        profiler_mark(dev, fg, cmd, slot, STAGE_FILTER);
         if (k > 0) {
             dispatch(dev, cmd, pl->pipelines[PASS_SCALE], pl->layouts[PASS_SCALE],
                      fg->sets[p][SET_SCALE + k - 1], &ofk, 1, (fg->flow_size[k - 1].width + 3) / 4,
                      (fg->flow_size[k - 1].height + 3) / 4, 1);
+            profiler_mark(dev, fg, cmd, slot, STAGE_SCALE);
         }
     }
 
@@ -1069,8 +1209,10 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
                                     0, (uint32_t)sizeof push, &push);
         dispatch(dev, cmd, pl->interpolate[fg->variant], pl->layouts[PASS_INTERPOLATE],
                  fg->sets[p][SET_INTERPOLATE], NULL, 0, (w + 7) / 8, (h + 7) / 8, 1);
+        profiler_mark(dev, fg, cmd, slot, STAGE_INTERPOLATE);
         copy_whole(dev, cmd, fg->output.image, VK_IMAGE_LAYOUT_GENERAL, target,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, fg->extent);
+        profiler_mark(dev, fg, cmd, slot, STAGE_OUTPUT);
 
         if (afmf_framegen_dump_pending(fg)) {
             VkBufferImageCopy region = {

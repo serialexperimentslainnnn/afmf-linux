@@ -62,6 +62,11 @@ struct afmf_device_fns {
     PFN_vkCmdPushConstants cmd_push_constants;
     PFN_vkCmdClearColorImage cmd_clear_color_image;
     PFN_vkCmdCopyImageToBuffer cmd_copy_image_to_buffer;
+    PFN_vkCreateQueryPool create_query_pool;
+    PFN_vkDestroyQueryPool destroy_query_pool;
+    PFN_vkCmdResetQueryPool cmd_reset_query_pool;
+    PFN_vkCmdWriteTimestamp cmd_write_timestamp;
+    PFN_vkGetQueryPoolResults get_query_pool_results;
 
     PFN_vkCreateSwapchainKHR create_swapchain;
     PFN_vkDestroySwapchainKHR destroy_swapchain;

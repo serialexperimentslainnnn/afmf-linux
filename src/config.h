@@ -16,6 +16,7 @@ struct afmf_config {
     uint32_t flow_levels;        /* AFMF_SEARCH_MODE: optical flow pyramid levels, 5 standard, 7 high */
     enum afmf_fast_motion_response fast_motion; /* AFMF_FAST_MOTION_RESPONSE: repeat | blend */
     const char *dump_dir;        /* AFMF_DUMP_DIR: where the first generated frames are written as PPM */
+    bool profile;                /* AFMF_PROFILE=1 (or AFMF_LOG=3): GPU time per pass, logged periodically */
     bool invalid;                /* some variable was set but unparsable; caller reports it */
 };
 

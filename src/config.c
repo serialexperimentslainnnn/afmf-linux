@@ -65,6 +65,7 @@ static void init(void)
      * (+-512 px); auto picks high. */
     long flow_levels = 7;
     long fast_motion = AFMF_RESPONSE_REPEAT_FRAMES;
+    long profile = 0;
 
     static const struct choice search_modes[] = {{"auto", 7}, {"standard", 5}, {"high", 7}};
     static const struct choice responses[] = {{"repeat", AFMF_RESPONSE_REPEAT_FRAMES},
@@ -76,6 +77,7 @@ static void init(void)
     ok = read_bounded("AFMF_INTERPOLATE", 0, 1, &interpolate) && ok;
     ok = read_choice("AFMF_SEARCH_MODE", search_modes, 3, &flow_levels) && ok;
     ok = read_choice("AFMF_FAST_MOTION_RESPONSE", responses, 2, &fast_motion) && ok;
+    ok = read_bounded("AFMF_PROFILE", 0, 1, &profile) && ok;
 
     g_config.log_level = (int)log_level;
     g_config.extra_images = (uint32_t)extra_images;
@@ -85,6 +87,7 @@ static void init(void)
     g_config.fast_motion = (enum afmf_fast_motion_response)fast_motion;
     const char *dump_dir = getenv("AFMF_DUMP_DIR");
     g_config.dump_dir = dump_dir != NULL && *dump_dir != '\0' ? dump_dir : NULL;
+    g_config.profile = profile != 0 || log_level >= AFMF_LOG_DEBUG;
     g_config.invalid = !ok;
 }
 

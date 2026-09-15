@@ -14,6 +14,7 @@ has no interpolation variant fall back to repeating the previous frame.
 | To… | Go to | Note |
 |---|---|---|
 | The interpolation maths (warp, fallback, block filtering) | `shaders/afmf_interpolate.comp` | 4 output-format variants compiled by CMake |
+| Per-stage GPU timing | `src/framegen.c` `profiler_*` | Query pool per slot, read on slot reuse, never blocks |
 | Optical flow sequencing, resources, descriptor sets | `src/framegen.c` | `afmf_framegen_record` = 1 copy + 7 FFX passes (x levels) + interpolate |
 | Which swapchain formats interpolate and how | `src/framegen.c` `describe_format` | R8G8B8A8, B8G8R8A8 (+sRGB), A2B10G10R10, R16G16B16A16F |
 | FidelityFX sources (never edited) | `shaders/fidelityfx/` | `NOTICE.md` has tag, commit and mapping |
@@ -57,6 +58,16 @@ has no interpolation variant fall back to repeating the previous frame.
 | `AFMF_SEARCH_MODE` | `auto` | `standard` = 5 pyramid levels (+-128 px), `high`/`auto` = 7 (+-512 px) |
 | `AFMF_FAST_MOTION_RESPONSE` | `repeat` | `repeat` or `blend` for pixels the flow cannot trust (scene change, > 64 px) |
 | `AFMF_DUMP_DIR` | unset | Writes the first 4 generated frames as `afmf_generated_<n>.ppm` (8-bit formats) |
+| `AFMF_PROFILE` | `0` | `1` (or `AFMF_LOG=3`) logs GPU time per stage every 300 frames and at teardown |
+
+## Performance register
+Method: `AFMF_TEST_EXTENT=3440x1440 AFMF_PROFILE=1 ./build/afmf_headless`, GPU timestamps per
+stage (`profiler_*` in `src/framegen.c`), RX 9070 XT, RADV Mesa 26.1.8. Re-measure when the
+shaders, the driver or the resolution change; review this table with every optimisation commit.
+
+| Date | Build | Total GPU/frame | Where it goes | Note |
+|---|---|---|---|---|
+| 2026-09-15 | `631b0c0` + profiler | 1222 us | block search 85 % (1038 us); everything else < 40 us each | Baseline; all on the application's queue |
 
 ## Commands
 | What | Command | Verified |

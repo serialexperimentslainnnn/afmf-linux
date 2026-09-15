@@ -35,6 +35,8 @@ has no interpolation variant fall back to repeating the previous frame.
 | Real-window smoke test | `tests/smoke.sh` | vkcube, implicit enable via `AFMF_ENABLE=1`, negative control |
 
 ## Structure
+- `README.md` — user documentation: build, install, usage, the configuration table, limitations.
+  Keep its table and this map's in step.
 - `src/` — the layer. `layer.c` routes, `swapchain.c` behaves; nothing else knows about the loader.
 - `layer/` — manifest template.
 - `shaders/` — `afmf_interpolate.comp` (ours) and `fidelityfx/` (vendored Optical Flow: core headers,

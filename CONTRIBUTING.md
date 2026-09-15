@@ -27,8 +27,9 @@ the static analyser.
 - **Validation clean.** The headless tests run under `VK_LAYER_KHRONOS_validation`, thread safety
   included, and fail on any validation error.
 - **No graphics-only commands** on the layer's command buffers (they run on a compute family).
-- **Nothing under `shaders/fidelityfx/`** is edited: it is vendored from the FidelityFX SDK as is,
-  see `shaders/fidelityfx/NOTICE.md`.
+- **Nothing under `shaders/fidelityfx/`** is edited beyond the one marked block
+  `shaders/fidelityfx/NOTICE.md` lists: it is vendored from the FidelityFX SDK as is.
+  A new local edit needs the `afmf-linux:` mark on every line and a line in that NOTICE.
 
 ## Style
 

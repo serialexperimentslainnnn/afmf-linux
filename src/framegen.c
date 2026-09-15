@@ -159,7 +159,7 @@ struct afmf_framegen_pipelines {
 
 static VkResult create_compute_pipeline(struct afmf_device *dev, const uint32_t *spirv,
                                         size_t spirv_size, VkPipelineLayout layout,
-                                        VkPipeline *out)
+                                        const VkSpecializationInfo *specialization, VkPipeline *out)
 {
     VkShaderModuleCreateInfo module_info = {
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -178,6 +178,7 @@ static VkResult create_compute_pipeline(struct afmf_device *dev, const uint32_t 
             .stage = VK_SHADER_STAGE_COMPUTE_BIT,
             .module = module,
             .pName = "main",
+            .pSpecializationInfo = specialization,
         },
         .layout = layout,
     };
@@ -254,22 +255,31 @@ static VkResult pipelines_create(struct afmf_device *dev)
 
         if (i == PASS_INTERPOLATE || i == PASS_DOWNSAMPLE)
             continue;
+        /* The search's static-block threshold (afmfStaticBlockSad in the patched v5 header). */
+        uint32_t static_sad = afmf_config_get()->static_block_sad;
+        VkSpecializationMapEntry entry = {.constantID = 0, .offset = 0, .size = sizeof static_sad};
+        VkSpecializationInfo search_constants = {
+            .mapEntryCount = 1,
+            .pMapEntries = &entry,
+            .dataSize = sizeof static_sad,
+            .pData = &static_sad,
+        };
         res = create_compute_pipeline(dev, pass->spirv, pass->spirv_size, p->layouts[i],
-                                      &p->pipelines[i]);
+                                      i == PASS_SEARCH ? &search_constants : NULL, &p->pipelines[i]);
         if (res != VK_SUCCESS)
             return res;
     }
     for (uint32_t v = 0; v < VARIANT_COUNT; v++) {
         VkResult res = create_compute_pipeline(dev, interpolate_variants[v].spirv,
                                                interpolate_variants[v].spirv_size,
-                                               p->layouts[PASS_INTERPOLATE], &p->interpolate[v]);
+                                               p->layouts[PASS_INTERPOLATE], NULL, &p->interpolate[v]);
         if (res != VK_SUCCESS)
             return res;
     }
     for (uint32_t v = 0; v < HALF_COUNT; v++) {
         VkResult res = create_compute_pipeline(dev, downsample_variants[v].spirv,
                                                downsample_variants[v].spirv_size,
-                                               p->layouts[PASS_DOWNSAMPLE], &p->downsample[v]);
+                                               p->layouts[PASS_DOWNSAMPLE], NULL, &p->downsample[v]);
         if (res != VK_SUCCESS)
             return res;
     }

@@ -24,6 +24,7 @@ names mirror the settings AMD exposes for AFMF on Windows where such a setting e
 | `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: uneven cadence, the compositor may drop generated frames |
 | `AFMF_GOVERNOR` | `1` | Steps generation down while the GPU is contended (the generated frame ready later than half the frame time, three frames in a row): five search levels first, then one companion in two, then one in three; back up a step after 60 frames ready early. `0` generates every frame regardless |
 | `AFMF_MIN_FPS` | `30` | Below this real frame rate no companion is made: doubling 25 fps is not worth its latency. `0` removes the floor |
+| `AFMF_STATIC_BLOCK_SAD` | `128` | A block whose 64 pixels differ from the previous frame's at rest by no more than this (sum of absolute 8-bit luma differences) is static: vector 0, search skipped. `0` searches every block |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_PROFILE` | `0` | `1` logs GPU time per stage and host time per present every 300 frames and at teardown |
 | `AFMF_DUMP_DIR` | unset | Writes the first generated frames as PPM files into that directory (8-bit formats only) |

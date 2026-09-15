@@ -99,6 +99,10 @@ static void init(void)
      * frame rate doubling is not worth its latency. */
     long governor = 1;
     long min_fps = 30;
+    /* Sum of absolute 8-bit luma differences over a block's 64 pixels between the two frames at
+     * rest; 128 is two levels per pixel on average, what temporal anti-aliasing leaves on a
+     * still image. Under it the block is stored as static and its search is skipped. */
+    long static_block_sad = 128;
 
     static const struct choice search_modes[] = {{"auto", AFMF_SEARCH_AUTO},
                                                 {"standard", AFMF_SEARCH_STANDARD},
@@ -124,6 +128,7 @@ static void init(void)
     ok = read_choice("AFMF_PRESENT_MODE", present_modes, 2, &present_mode) && ok;
     ok = read_bounded("AFMF_GOVERNOR", 0, 1, &governor) && ok;
     ok = read_bounded("AFMF_MIN_FPS", 0, 240, &min_fps) && ok;
+    ok = read_bounded("AFMF_STATIC_BLOCK_SAD", 0, 16320, &static_block_sad) && ok;
 
     g_config.log_level = (int)log_level;
     g_config.extra_images = (uint32_t)extra_images;
@@ -142,6 +147,7 @@ static void init(void)
     g_config.present_mode = (enum afmf_present_mode)present_mode;
     g_config.governor = governor != 0;
     g_config.min_fps = (uint32_t)min_fps;
+    g_config.static_block_sad = (uint32_t)static_block_sad;
     g_config.invalid = !ok;
 }
 

@@ -12,6 +12,10 @@ All notable changes to afmf-linux are documented here. The format follows
   and a per-present switch back to FIFO is rewritten. In FIFO the doubled presents each took a
   refresh slot: vkcube at 165 Hz got 2 companions in 1196 presents, now 595 in 596. `keep`
   leaves the game's mode alone.
+- `AFMF_STATIC_BLOCK_SAD` (`128`): the block search skips blocks that did not change between the
+  two frames (their SAD at rest, which the SDK already computed for its level-0 fallback, is taken
+  first); still parts of the picture cost nothing to search. One marked edit in the vendored
+  search shader, listed in `shaders/fidelityfx/NOTICE.md`.
 - `AFMF_GOVERNOR` (on by default): under GPU contention, when the generated frame is ready later
   than half the frame time three frames in a row, generation steps down (five search levels, then
   one companion in two, then one in three) and steps back up once the GPU catches up; each step is

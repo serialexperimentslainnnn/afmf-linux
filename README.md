@@ -3,7 +3,7 @@
 [![CI](https://github.com/serialexperimentslainnnn/afmf-linux/actions/workflows/ci.yml/badge.svg)](https://github.com/serialexperimentslainnnn/afmf-linux/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/serialexperimentslainnnn/afmf-linux?display_name=tag)](https://github.com/serialexperimentslainnnn/afmf-linux/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-afmf--linux-informational)](https://serialexperimentslainnnn.github.io/afmf-linux/)
+[![Docs](https://img.shields.io/badge/docs-afmf--linux-informational)](https://afmf-linux.digitalexperiments.dev/)
 
 **afmf-linux** is an open-source **frame generation layer for Linux gaming**: the equivalent of
 **AMD Fluid Motion Frames (AFMF)** as a Vulkan implicit layer (`VK_LAYER_AFMF`). It generates one
@@ -19,7 +19,7 @@ shaders for the motion estimation, a small interpolation shader of its own, and 
 half-frame pacing (4-5 ms of added latency at 120 fps) AMD documents for AFMF.
 
 **Documentation, install guide, configuration and measured numbers:**
-<https://serialexperimentslainnnn.github.io/afmf-linux/>
+<https://afmf-linux.digitalexperiments.dev/>
 
 ## Status
 

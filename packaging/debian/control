@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Lain <lain@digitalexperiments.dev>
 Build-Depends: debhelper-compat (= 13), cmake (>= 3.28), ninja-build, gcc, libvulkan-dev (>= 1.3.250), glslang-tools, spirv-tools
 Standards-Version: 4.7.0
-Homepage: https://serialexperimentslainnnn.github.io/afmf-linux/
+Homepage: https://afmf-linux.digitalexperiments.dev/
 Vcs-Git: https://github.com/serialexperimentslainnnn/afmf-linux.git
 Vcs-Browser: https://github.com/serialexperimentslainnnn/afmf-linux
 Rules-Requires-Root: no

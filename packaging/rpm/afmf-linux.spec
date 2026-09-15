@@ -7,7 +7,7 @@ Version:        0.3.0
 Release:        1%{?dist}
 Summary:        AMD Fluid Motion Frames for Linux: Vulkan frame generation layer
 License:        MIT
-URL:            https://serialexperimentslainnnn.github.io/afmf-linux/
+URL:            https://afmf-linux.digitalexperiments.dev/
 Source0:        https://github.com/serialexperimentslainnnn/afmf-linux/archive/v%{version}/%{name}-%{version}.tar.gz
 
 BuildRequires:  cmake >= 3.28

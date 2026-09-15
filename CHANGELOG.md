@@ -6,6 +6,23 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `AFMF_GOVERNOR` (on by default): under GPU contention, when the generated frame is ready later
+  than half the frame time three frames in a row, generation steps down (five search levels, then
+  one companion in two, then one in three) and steps back up once the GPU catches up; each step is
+  logged. `AFMF_MIN_FPS` (30): no companions below that real frame rate.
+- Present ids (`VK_KHR_present_id` and `present_id2`, what DXVK attaches) are carried on the real
+  frame by the presentation thread instead of forcing the present inline; tests `headless_present_id1`
+  and `headless_present_id2`.
+
+### Changed
+- Pacing measures the half-frame hold from the moment the generated frame is ready on the GPU, not
+  from the present call, capped at one frame after it; the profile line shows the delay as `gpu done`.
+
+### Fixed
+- The application's `vkGetSwapchainImagesKHR` is serialised with the presentation thread's presents
+  (a thread-safety validation error when both ran at once).
+
 ## [0.4.0] - 2026-09-15
 
 ### Added

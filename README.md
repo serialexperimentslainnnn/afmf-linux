@@ -122,7 +122,7 @@ Set `AFMF_LOG=2` to see what the layer decided for each swapchain on stderr, for
 
 ```
 [AFMF info] interpolation ready: 3440x1440, flow at 1720x720 (215x90 blocks of 16 px), 5 pyramid levels
-[AFMF info] swapchain 0x... destroyed after 5000 presents: 4998 generated, 2 skipped (1 no free image, 1 no history)
+[AFMF info] swapchain 0x... destroyed after 5000 presents: 4998 generated, 2 skipped (1 no free image, 1 no history, 0 held back by the governor)
 ```
 
 `DISABLE_AFMF=1` keeps the layer out of a process even when `AFMF_ENABLE=1` is set, which is the
@@ -146,6 +146,8 @@ Windows (search mode, performance mode, fast motion response) where such a setti
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest the layer waits for the companion's image to be released before presenting the real frame alone. The image is requested a frame ahead, so the default never stalls the game |
 | `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue and presents inline (diagnosis) |
 | `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: uneven cadence, the compositor may drop generated frames |
+| `AFMF_GOVERNOR` | `1` | Steps generation down while the GPU is contended (the generated frame ready later than half the frame time, three frames in a row): five search levels first, then one companion in two, then one in three; back up a step after 60 frames ready early. `0` generates every frame regardless |
+| `AFMF_MIN_FPS` | `30` | Below this real frame rate no companion is made: doubling 25 fps is not worth its latency. `0` removes the floor |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_PROFILE` | `0` | `1` logs GPU time per stage every 300 frames and at teardown |
 | `AFMF_DUMP_DIR` | unset | Writes the first generated frames as PPM files into that directory (8-bit formats only) |

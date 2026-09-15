@@ -21,6 +21,8 @@ names mirror the settings AMD exposes for AFMF on Windows where such a setting e
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest the layer waits for the companion's image to be released before presenting the real frame alone. The image is requested a frame ahead, so the default never stalls the game |
 | `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue and presents inline (diagnosis) |
 | `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: uneven cadence, the compositor may drop generated frames |
+| `AFMF_GOVERNOR` | `1` | Steps generation down while the GPU is contended (the generated frame ready later than half the frame time, three frames in a row): five search levels first, then one companion in two, then one in three; back up a step after 60 frames ready early. `0` generates every frame regardless |
+| `AFMF_MIN_FPS` | `30` | Below this real frame rate no companion is made: doubling 25 fps is not worth its latency. `0` removes the floor |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_PROFILE` | `0` | `1` logs GPU time per stage and host time per present every 300 frames and at teardown |
 | `AFMF_DUMP_DIR` | unset | Writes the first generated frames as PPM files into that directory (8-bit formats only) |
@@ -47,8 +49,8 @@ to a bug report.
 [AFMF info] surface 0x... created: Wayland
 [AFMF info] interpolation ready: 3440x1440, flow at 1720x720 (215x90 blocks of 16 px), 5 pyramid levels
 [AFMF info] swapchain 0x... created: 3440x1440, format 37, present mode 2, 5 images (app asked 3), generation on (layer queue)
-[AFMF info] swapchain 0x...: 3001 presents, 2999 generated, 0 no free image; 8.05 ms between presents (124 real fps); in the layer 85 us per present: slot fence 2, acquire 3, record 41, submit 35; presentation thread: present generated 279, present real 252, refill 29, pacing hold 4.53 ms
-[AFMF info] swapchain 0x... destroyed after 26381 presents: 26380 generated, 1 skipped (0 no free image, 1 no history)
+[AFMF info] swapchain 0x...: 3001 presents, 2999 generated, 0 no free image; 8.05 ms between presents (124 real fps); in the layer 85 us per present: slot fence 2, acquire 3, record 41, submit 35; presentation thread: present generated 279, present real 252, refill 29, gpu done +0.41 ms, pacing hold 4.53 ms; governor step 0
+[AFMF info] swapchain 0x... destroyed after 26381 presents: 26380 generated, 1 skipped (0 no free image, 1 no history, 0 held back by the governor)
 ```
 
 - **real fps** is the game's own rate; MangoHud shows roughly twice that.
@@ -57,4 +59,9 @@ to a bug report.
   keeps more in flight than a desktop compositor (`AFMF_GAMESCOPE=1`).
 - **in the layer** is host time on the game's thread per present; **presentation thread** is the
   layer's own thread, off the game's critical path.
-- **pacing hold** is how long the real frame was held back: half the frame time.
+- **gpu done** is how long after the present call the generated frame was ready; **pacing hold**
+  is how long the real frame was held back: half the frame time from that point, capped at a frame.
+- **governor step** is where `AFMF_GOVERNOR` sits: `0` every frame with the full search, `1` every
+  frame with five search levels, `2` one companion in two, `3` one in three; each change is logged
+  with the reason. **held back by the governor** counts the presents that step 2 or 3 left without a
+  companion.

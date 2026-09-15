@@ -88,6 +88,9 @@ has no interpolation variant fall back to repeating the previous frame.
 | `AFMF_PERFORMANCE_MODE` | `auto` | `quality` = flow at display resolution, `performance` = at half (16 px blocks); `auto` = performance from 2560x1440 up |
 | `AFMF_ASYNC` | `1` | `0` keeps the work on the application's queue and presents inline (diagnosis, fallback) |
 | `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one (no hold) |
+| `AFMF_PRESENT_MODE` | `auto` | Parsed (`auto`, `keep`), not yet applied: plan point 1 (FIFO -> MAILBOX from the layer) |
+| `AFMF_GOVERNOR` | `1` | `governor_allows` in `src/swapchain.c`: steps 0 all, 1 five search levels (`afmf_framegen_set_levels`), 2 one companion in two, 3 one in three; up after 3 frames with the generated frame ready > 50 % into the frame, down after 60 frames < 25 % |
+| `AFMF_MIN_FPS` | `30` | No companion below this real frame rate (`frame_ms_ema`); `0` disables; ctest `headless_min_fps` |
 
 ## Performance register
 Method: `AFMF_TEST_EXTENT=3440x1440 AFMF_PROFILE=1 ./build/afmf_headless`, GPU timestamps per

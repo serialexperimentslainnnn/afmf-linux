@@ -1,13 +1,33 @@
-# afmf-linux
+# AMD Fluid Motion Frames on Linux (afmf-linux)
 
-An open equivalent of AMD Fluid Motion Frames for Linux: a Vulkan implicit layer (`VK_LAYER_AFMF`)
-that generates one interpolated frame between every two frames an application presents, from the
-colour buffer alone. No game integration, no kernel module, no driver patch: it works with any
-64-bit Vulkan application, including DXVK and vkd3d-proton titles under Proton.
+[![CI](https://github.com/serialexperimentslainnnn/afmf-linux/actions/workflows/ci.yml/badge.svg)](https://github.com/serialexperimentslainnnn/afmf-linux/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/serialexperimentslainnnn/afmf-linux?display_name=tag)](https://github.com/serialexperimentslainnnn/afmf-linux/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-afmf--linux-informational)](https://serialexperimentslainnnn.github.io/afmf-linux/)
+
+**afmf-linux** is an open-source **frame generation layer for Linux gaming**: the equivalent of
+**AMD Fluid Motion Frames (AFMF)** as a Vulkan implicit layer (`VK_LAYER_AFMF`). It generates one
+interpolated frame between every two frames a game presents, from the colour buffer alone, so the
+frame rate on screen doubles. No game integration, no kernel module, no Mesa or driver patch: it
+works with any 64-bit Vulkan application, including **DirectX games under Proton** (DXVK,
+vkd3d-proton) and native Linux titles, on **RADV / AMD RDNA** GPUs and, in principle, any Vulkan
+driver.
 
 AMD's AFMF is not a hardware feature: on Windows it is compute-shader work the driver inserts at
-present time. This layer does the same thing on Linux, with AMD's own FidelityFX Optical Flow
-shaders for the motion estimation and a small interpolation shader of its own.
+present time. This layer does the same thing on Linux, with AMD's own **FidelityFX Optical Flow**
+shaders for the motion estimation, a small interpolation shader of its own, and the same
+half-frame pacing (4-5 ms of added latency at 120 fps) AMD documents for AFMF.
+
+**Documentation, install guide, configuration and measured numbers:**
+<https://serialexperimentslainnnn.github.io/afmf-linux/>
+
+## Status
+
+Developed and measured on an RX 9070 XT (RDNA4), Mesa 26.1.8 RADV, Fedora 44, KDE Plasma Wayland,
+3440x1440 at 165 Hz. In Monster Hunter Wilds (vkd3d-proton) it takes 120 real fps to ~250 on
+screen with 76-91 us of host time per frame; in Cyberpunk 2077 with ray tracing it doubles the
+base. Every frame gets a companion (26,380 of 26,381 in a session). Other GPUs, drivers and
+compositors are untested: reports welcome, the bug template asks for what is needed.
 
 ## How it works
 
@@ -124,15 +144,43 @@ AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=blend <game>
   is no free image to put them in); in mailbox or immediate mode the compositor drops whatever
   exceeds the refresh rate.
 
+## FAQ
+
+**Is this really AMD Fluid Motion Frames?** It is the same idea, built the same way: driver-level
+frame generation from the colour buffer, using AMD's FidelityFX Optical Flow for the motion and a
+custom interpolation pass, applied at present time to any game. It is not AMD's code for the
+interpolation and it is not affiliated with AMD.
+
+**How much latency does it add?** Half a frame time, the same as AFMF: at 120 real fps about 4 ms.
+`AFMF_PACING=0` removes the hold at the cost of an uneven cadence.
+
+**Does it work with Proton / DirectX 11 / DirectX 12 games?** Yes: DXVK and vkd3d-proton present
+through Vulkan, which is where the layer sits. It has been measured with vkd3d-proton titles.
+
+**Does it need an AMD GPU?** No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image
+atomics; the tuning was done on RDNA4 with RADV. RDNA2/RDNA3, Intel and NVIDIA are untested.
+
+**Does it work with the game's own frame generation (FSR 3/4 FG, DLSS FG)?** It stacks: the layer
+doubles whatever the game presents. Turn the game's frame generation off for a fair comparison.
+
+**Gamescope? HDR?** HDR10 and scRGB swapchains are interpolated (10-bit and 16-bit float
+variants). Whether the game gets HDR at all is between Wine, the compositor and Mesa, not the
+layer. Gamescope is untested.
+
+**Why is my frame rate not exactly double?** The ceiling is 2x the base the game reaches on Linux
+without the layer (`DISABLE_AFMF=1` to measure it), minus GPU contention when the game already
+saturates the GPU; in FIFO at the display's refresh rate there is no room for companions at all.
+
 ## Tests
 
 ```sh
 ctest --test-dir build --output-on-failure
 ```
 
-`headless` and `headless_performance` run the layer under the Khronos validation layer on a
-headless surface, present 120 frames of a synthetic moving square, require 119 generated frames
-and check that the generated frames show the square exactly halfway between the real ones.
+`headless`, `headless_performance` and `headless_shared_queue` run the layer under the Khronos
+validation layer on a headless surface, present 120 frames of a synthetic moving square, require
+119 generated frames and check that the generated frames show the square exactly halfway between
+the real ones. They need a GPU, so CI only builds, lints and runs the static analyser.
 `tests/smoke.sh` opens `vkcube` with the layer enabled implicitly and once more with it disabled.
 
 A sanitizer build is one option away: `cmake -S . -B build-asan -DAFMF_SANITIZE=ON`.

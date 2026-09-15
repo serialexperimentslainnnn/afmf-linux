@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="{{ site.lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0d10" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  {%- seo -%}
+  {%- feed_meta -%}
+  <link rel="icon" href="{{ '/assets/favicon.svg' | relative_url }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+  {%- include structured-data.html -%}
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="{{ '/' | relative_url }}">
+      <img src="{{ '/assets/logo.svg' | relative_url }}" alt="" width="28" height="28">
+      <span>afmf-linux</span>
+    </a>
+    <nav aria-label="Site">
+      <a href="{{ '/install/' | relative_url }}">Install</a>
+      <a href="{{ '/configuration/' | relative_url }}">Configuration</a>
+      <a href="{{ '/performance/' | relative_url }}">Performance</a>
+      <a href="{{ '/faq/' | relative_url }}">FAQ</a>
+      <a href="https://github.com/{{ site.repository }}" rel="noopener">GitHub</a>
+    </nav>
+  </header>
+  <main id="main">
+    {{ content }}
+  </main>
+  <footer class="site-footer">
+    <p>afmf-linux is MIT licensed. "AMD", "Fluid Motion Frames" and "FidelityFX" are trademarks of
+      Advanced Micro Devices, Inc.; this project is not affiliated with or endorsed by AMD.</p>
+    <p><a href="https://github.com/{{ site.repository }}" rel="noopener">Source</a> &middot;
+      <a href="https://github.com/{{ site.repository }}/releases/latest" rel="noopener">Latest release</a> &middot;
+      <a href="https://github.com/{{ site.repository }}/issues" rel="noopener">Issues</a> &middot;
+      <a href="{{ '/feed.xml' | relative_url }}">Feed</a></p>
+  </footer>
+</body>
+</html>

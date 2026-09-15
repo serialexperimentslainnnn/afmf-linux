@@ -1,0 +1,4 @@
+# Local preview only: `bundle install && bundle exec jekyll serve` from docs/.
+# GitHub Pages ignores this file and uses its own bundled versions.
+source "https://rubygems.org"
+gem "github-pages", group: :jekyll_plugins

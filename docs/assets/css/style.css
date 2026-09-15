@@ -1,0 +1,38 @@
+/* afmf-linux docs: system fonts, no JavaScript, one small stylesheet. */
+:root {
+  --bg: #ffffff; --fg: #1a1c20; --muted: #5a6270; --accent: #c2410c; --line: #e3e6ea; --code: #f4f5f7;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0b0d10; --fg: #e6e8eb; --muted: #9aa3ad; --accent: #fb923c; --line: #22262c; --code: #14171c; }
+}
+* { box-sizing: border-box; }
+html { font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); }
+body { margin: 0; }
+.skip { position: absolute; left: -999px; top: 0; background: var(--accent); color: #fff; padding: .5rem 1rem; }
+.skip:focus { left: 0; }
+.site-header { display: flex; flex-wrap: wrap; gap: 1rem 2rem; align-items: center; justify-content: space-between;
+  max-width: 60rem; margin: 0 auto; padding: 1rem 1.25rem; border-bottom: 1px solid var(--line); }
+.brand { display: inline-flex; align-items: center; gap: .5rem; font-weight: 700; text-decoration: none; color: var(--fg); }
+nav a { margin-right: 1.25rem; color: var(--muted); text-decoration: none; }
+nav a:hover, nav a:focus { color: var(--accent); }
+main { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+h1 { font-size: 2rem; line-height: 1.2; margin: .5rem 0 1rem; }
+h2 { font-size: 1.4rem; margin-top: 2.2rem; border-bottom: 1px solid var(--line); padding-bottom: .25rem; }
+h3 { font-size: 1.1rem; }
+a { color: var(--accent); }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+code { background: var(--code); padding: .1em .35em; border-radius: 4px; }
+pre { background: var(--code); padding: .9rem 1rem; overflow: auto; border-radius: 6px; border: 1px solid var(--line); }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; font-size: .95em; display: block; overflow-x: auto; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+.lead { font-size: 1.15rem; color: var(--muted); }
+.cta { display: inline-block; background: var(--accent); color: #fff; padding: .6rem 1.1rem; border-radius: 6px; text-decoration: none; font-weight: 600; margin: .5rem .5rem .5rem 0; }
+.cta.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.numbers { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+.numbers div { border: 1px solid var(--line); border-radius: 8px; padding: 1rem; }
+.numbers strong { display: block; font-size: 1.6rem; }
+.numbers span { color: var(--muted); font-size: .9em; }
+.site-footer { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .9em; }

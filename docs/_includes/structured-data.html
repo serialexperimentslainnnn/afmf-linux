@@ -1,0 +1,40 @@
+{%- comment -%} JSON-LD: the software itself on every page, the FAQ where it is declared. {%- endcomment -%}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "afmf-linux",
+  "alternateName": "AMD Fluid Motion Frames for Linux",
+  "description": {{ site.description | strip_newlines | jsonify }},
+  "applicationCategory": "UtilitiesApplication",
+  "applicationSubCategory": "Frame generation Vulkan layer",
+  "operatingSystem": "Linux",
+  "softwareVersion": "0.3.0",
+  "license": "https://opensource.org/licenses/MIT",
+  "isAccessibleForFree": true,
+  "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+  "url": "{{ site.url }}{{ site.baseurl }}/",
+  "downloadUrl": "https://github.com/{{ site.repository }}/releases/latest",
+  "codeRepository": "https://github.com/{{ site.repository }}",
+  "programmingLanguage": "C",
+  "keywords": "AMD Fluid Motion Frames, AFMF, frame generation, Linux gaming, Vulkan layer, Proton, DXVK, vkd3d-proton, RADV, RDNA, FidelityFX optical flow",
+  "author": {"@type": "Person", "name": "{{ site.author.name }}", "url": "{{ site.author.url }}"}
+}
+</script>
+{%- if page.faq -%}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+  {%- for item in page.faq %}
+    {
+      "@type": "Question",
+      "name": {{ item.q | jsonify }},
+      "acceptedAnswer": {"@type": "Answer", "text": {{ item.a | jsonify }}}
+    }{% unless forloop.last %},{% endunless %}
+  {%- endfor %}
+  ]
+}
+</script>
+{%- endif -%}

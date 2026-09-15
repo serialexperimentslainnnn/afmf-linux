@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#0b0d10"/>
+  <g transform="translate(80 120)">
+    <rect width="120" height="120" rx="24" fill="#c2410c"/>
+    <rect x="19" y="34" width="26" height="52" rx="4" fill="#fff"/>
+    <rect x="75" y="34" width="26" height="52" rx="4" fill="#fff"/>
+    <rect x="47" y="34" width="26" height="52" rx="4" fill="#fff" opacity=".55"/>
+  </g>
+  <text x="80" y="330" fill="#ffffff" font-family="system-ui, sans-serif" font-size="72" font-weight="700">afmf-linux</text>
+  <text x="80" y="400" fill="#e6e8eb" font-family="system-ui, sans-serif" font-size="40">AMD Fluid Motion Frames for Linux</text>
+  <text x="80" y="460" fill="#9aa3ad" font-family="system-ui, sans-serif" font-size="30">Open-source Vulkan frame generation layer for any game: Proton, DXVK, native</text>
+  <text x="80" y="560" fill="#fb923c" font-family="ui-monospace, monospace" font-size="28">AFMF_ENABLE=1 %command%</text>
+</svg>

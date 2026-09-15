@@ -1,0 +1,48 @@
+# GitHub Pages site for afmf-linux (Jekyll 3.10, GitHub Pages plugin allowlist only).
+title: afmf-linux
+tagline: AMD Fluid Motion Frames for Linux
+description: >-
+  Open-source AMD Fluid Motion Frames (AFMF) for Linux: a Vulkan frame generation layer that
+  doubles the frame rate of any game, Proton or native, on RADV and AMD RDNA GPUs. Optical flow
+  interpolation, half-frame pacing, no kernel module, no driver patch.
+url: https://serialexperimentslainnnn.github.io
+baseurl: /afmf-linux
+lang: en
+repository: serialexperimentslainnnn/afmf-linux
+author:
+  name: Lain
+  url: https://github.com/serialexperimentslainnnn
+logo: /assets/logo.svg
+image: /assets/og.png
+twitter:
+  card: summary_large_image
+social:
+  name: afmf-linux
+  links:
+    - https://github.com/serialexperimentslainnnn/afmf-linux
+
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+  - jekyll-feed
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+permalink: /:title/
+timezone: Europe/Madrid
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+      image: /assets/og.png
+
+exclude:
+  - PUBLISHING.md
+  - Gemfile
+  - Gemfile.lock
+  - vendor
+  - README.md

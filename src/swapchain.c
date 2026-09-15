@@ -36,6 +36,7 @@ struct afmf_present_job {
     uint64_t hold_ns;         /* how long after arrival the real frame goes out */
     bool have_present_id;
     uint64_t present_id;
+    bool present_id_v2;   /* VK_KHR_present_id2 carried the id (same shape, its own sType) */
     bool have_present_mode;
     VkPresentModeKHR present_mode;
     VkFence present_fence; /* VK_EXT_swapchain_maintenance1: signalled with the real frame */
@@ -727,6 +728,13 @@ static VkResult present_one(struct afmf_device *dev, struct afmf_swapchain *sc, 
         .swapchainCount = 1,
         .pPresentIds = &job->present_id,
     };
+#ifdef VK_KHR_present_id2
+    VkPresentId2KHR id2 = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_ID_2_KHR,
+        .swapchainCount = 1,
+        .pPresentIds = &job->present_id,
+    };
+#endif
     VkSwapchainPresentModeInfoEXT mode = {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT,
         .swapchainCount = 1,
@@ -758,8 +766,16 @@ static VkResult present_one(struct afmf_device *dev, struct afmf_swapchain *sc, 
         tail = &mode.pNext;
     }
     if (real && job->have_present_id) {
-        *tail = &id;
-        tail = &id.pNext;
+#ifdef VK_KHR_present_id2
+        if (job->present_id_v2) {
+            *tail = &id2;
+            tail = &id2.pNext;
+        } else
+#endif
+        {
+            *tail = &id;
+            tail = &id.pNext;
+        }
     }
     if (real && job->present_fence != VK_NULL_HANDLE) {
         *tail = &fence;
@@ -843,8 +859,9 @@ static void *presenter_main(void *arg)
             sc->deferred_result = worst;
         sc->job_head = (sc->job_head + 1) % AFMF_MAX_JOBS;
         sc->job_count--;
-        if (sc->job_count == 0)
-            pthread_cond_broadcast(&sc->drain_cond);
+        /* Both waiters re-check their own condition: the drain wants zero, a full queue wants
+         * one free slot. */
+        pthread_cond_broadcast(&sc->drain_cond);
     }
     pthread_mutex_unlock(&sc->job_lock);
     return NULL;
@@ -905,6 +922,19 @@ static bool job_from_chain(const VkPresentInfoKHR *info, struct afmf_present_job
             }
             break;
         }
+#ifdef VK_KHR_present_id2
+        case VK_STRUCTURE_TYPE_PRESENT_ID_2_KHR: {
+            /* DXVK 2.7+ under a Mesa that offers present_id2; without carrying it every present
+             * went inline, without pacing. */
+            const VkPresentId2KHR *id = (const VkPresentId2KHR *)s;
+            if (id->pPresentIds != NULL && id->pPresentIds[0] != 0) {
+                job->have_present_id = true;
+                job->present_id_v2 = true;
+                job->present_id = id->pPresentIds[0];
+            }
+            break;
+        }
+#endif
         case VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT: {
             const VkSwapchainPresentModeInfoEXT *m = (const VkSwapchainPresentModeInfoEXT *)s;
             job->have_present_mode = true;

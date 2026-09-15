@@ -210,6 +210,18 @@ set_tests_properties(headless_gamescope_passive PROPERTIES
     SKIP_RETURN_CODE 77
 )
 
+# Present ids (VK_KHR_present_id and present_id2, what DXVK attaches) must be carried on the
+# real frame by the presentation thread, never make the presents inline.
+foreach(id 1 2)
+    add_test(NAME headless_present_id${id} COMMAND afmf_headless)
+    set_tests_properties(headless_present_id${id} PROPERTIES
+        ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_PRESENT_ID=${id};AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
+        PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
+        FAIL_REGULAR_EXPRESSION "validation error|^failed|presenting inline"
+        SKIP_RETURN_CODE 77
+    )
+endforeach()
+
 if(AFMF_SANITIZE)
     foreach(target afmf-linux afmf_headless)
         target_compile_options(${target} PRIVATE ${AFMF_SANITIZE_FLAGS})

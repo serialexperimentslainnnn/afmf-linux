@@ -57,7 +57,14 @@ struct ctx {
     VkDeviceMemory staging_memory;
     uint8_t *staging_mapped;
     uint32_t validation_errors;
+    int present_id; /* AFMF_TEST_PRESENT_ID: 0 none, 1 VK_KHR_present_id, 2 VK_KHR_present_id2 */
 };
+
+static int wanted_present_id(void)
+{
+    const char *v = getenv("AFMF_TEST_PRESENT_ID");
+    return v == NULL ? 0 : v[0] == '2' ? 2 : v[0] == '1' ? 1 : 0;
+}
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL on_debug_message(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type,
@@ -110,9 +117,13 @@ static bool create_instance(struct ctx *ctx, bool with_validation)
 {
     /* Index 0 is closest to the application: the layer under test first, validation below it. */
     const char *layers[2] = {LAYER_NAME, VALIDATION_LAYER_NAME};
-    const char *extensions[3] = {VK_KHR_SURFACE_EXTENSION_NAME,
-                                 VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME,
-                                 VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
+    const char *extensions[4] = {VK_KHR_SURFACE_EXTENSION_NAME,
+                                 VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+    uint32_t extension_count = 2;
+    if (with_validation)
+        extensions[extension_count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    if (wanted_present_id() == 2) /* VK_KHR_present_id2 depends on it */
+        extensions[extension_count++] = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
     VkApplicationInfo app = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "afmf_headless",
@@ -123,7 +134,7 @@ static bool create_instance(struct ctx *ctx, bool with_validation)
         .pApplicationInfo = &app,
         .enabledLayerCount = with_validation ? 2u : 1u,
         .ppEnabledLayerNames = layers,
-        .enabledExtensionCount = with_validation ? 3u : 2u,
+        .enabledExtensionCount = extension_count,
         .ppEnabledExtensionNames = extensions,
     };
     CHECK(vkCreateInstance(&info, NULL, &ctx->instance));
@@ -205,7 +216,61 @@ static bool create_device_and_swapchain(struct ctx *ctx)
 {
     static const float priorities[MAX_QUEUES] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
                                                  1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-    const char *extensions[1] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    const char *extensions[2] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL};
+    uint32_t extension_count = 1;
+    /* AFMF_TEST_PRESENT_ID=1|2: present with VK_KHR_present_id / VK_KHR_present_id2 ids, which
+     * the layer must carry on the real frame instead of falling back to inline presents. Skipped
+     * when the driver or the headless surface does not offer the extension. */
+    ctx->present_id = wanted_present_id();
+    VkPhysicalDevicePresentIdFeaturesKHR id_features = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR, .presentId = VK_TRUE};
+#ifdef VK_KHR_present_id2
+    VkPhysicalDevicePresentId2FeaturesKHR id2_features = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_2_FEATURES_KHR, .presentId2 = VK_TRUE};
+#endif
+    const void *device_next = NULL;
+    if (ctx->present_id != 0) {
+        const char *ext = ctx->present_id == 2 ? "VK_KHR_present_id2" : VK_KHR_PRESENT_ID_EXTENSION_NAME;
+        uint32_t n = 0;
+        bool found = false;
+        if (vkEnumerateDeviceExtensionProperties(ctx->physical_device, NULL, &n, NULL) == VK_SUCCESS && n > 0) {
+            VkExtensionProperties *props = calloc(n, sizeof *props);
+            if (props != NULL && vkEnumerateDeviceExtensionProperties(ctx->physical_device, NULL, &n, props) == VK_SUCCESS)
+                for (uint32_t k = 0; k < n && !found; k++)
+                    found = strcmp(props[k].extensionName, ext) == 0;
+            free(props);
+        }
+#ifndef VK_KHR_present_id2
+        if (ctx->present_id == 2)
+            found = false; /* headers too old to build the structures */
+#endif
+#ifdef VK_KHR_present_id2
+        if (found && ctx->present_id == 2) { /* also a per-surface capability */
+            VkSurfaceCapabilitiesPresentId2KHR id2_caps = {
+                .sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_ID_2_KHR};
+            VkSurfaceCapabilities2KHR caps2 = {.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR,
+                                               .pNext = &id2_caps};
+            VkPhysicalDeviceSurfaceInfo2KHR surface_info = {
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR, .surface = ctx->surface};
+            PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR get_caps2 =
+                (PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR)vkGetInstanceProcAddr(
+                    ctx->instance, "vkGetPhysicalDeviceSurfaceCapabilities2KHR");
+            found = get_caps2 != NULL &&
+                    get_caps2(ctx->physical_device, &surface_info, &caps2) == VK_SUCCESS &&
+                    id2_caps.presentId2Supported == VK_TRUE;
+        }
+#endif
+        if (!found) {
+            (void)fprintf(stderr, "skipped: %s unavailable on this surface\n", ext);
+            exit(EXIT_SKIP);
+        }
+        extensions[extension_count++] = ext;
+#ifdef VK_KHR_present_id2
+        device_next = ctx->present_id == 2 ? (const void *)&id2_features : (const void *)&id_features;
+#else
+        device_next = &id_features;
+#endif
+    }
     VkDeviceQueueCreateInfo queues[MAX_FAMILIES] = {{
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
         .queueFamilyIndex = ctx->queue_family,
@@ -241,9 +306,10 @@ static bool create_device_and_swapchain(struct ctx *ctx)
     }
     VkDeviceCreateInfo device = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .pNext = device_next,
         .queueCreateInfoCount = queue_info_count,
         .pQueueCreateInfos = queues,
-        .enabledExtensionCount = 1,
+        .enabledExtensionCount = extension_count,
         .ppEnabledExtensionNames = extensions,
     };
     CHECK(vkCreateDevice(ctx->physical_device, &device, NULL, &ctx->device));
@@ -438,6 +504,13 @@ static bool present_frame(struct ctx *ctx, uint32_t frame)
     };
     CHECK(vkQueueSubmit(ctx->queue, 1, &submit, VK_NULL_HANDLE));
 
+    uint64_t present_id = frame + 1;
+    VkPresentIdKHR id = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR, .swapchainCount = 1, .pPresentIds = &present_id};
+#ifdef VK_KHR_present_id2
+    VkPresentId2KHR id2 = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_ID_2_KHR, .swapchainCount = 1, .pPresentIds = &present_id};
+#endif
     VkPresentInfoKHR present = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
@@ -446,6 +519,12 @@ static bool present_frame(struct ctx *ctx, uint32_t frame)
         .pSwapchains = &ctx->swapchain,
         .pImageIndices = &index,
     };
+    if (ctx->present_id == 1)
+        present.pNext = &id;
+#ifdef VK_KHR_present_id2
+    if (ctx->present_id == 2)
+        present.pNext = &id2;
+#endif
     res = vkQueuePresentKHR(ctx->queue, &present);
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR) {
         (void)fprintf(stderr, "vkQueuePresentKHR -> VkResult %d\n", (int)res);

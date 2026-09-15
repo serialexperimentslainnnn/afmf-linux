@@ -27,7 +27,7 @@
       <a href="https://github.com/{{ site.repository }}" rel="noopener">GitHub</a>
     </nav>
   </header>
-  <main id="main">
+  <main id="main"{% if page.wide %} class="wide"{% endif %}>
     {{ content }}
   </main>
   <footer class="site-footer">

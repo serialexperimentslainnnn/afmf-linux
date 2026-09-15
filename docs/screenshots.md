@@ -1,19 +1,21 @@
 ---
 title: Screenshots
 description: afmf-linux in Monster Hunter Wilds, Cyberpunk 2077, DOOM The Dark Ages, Overwatch 2 and Borderlands 4 at 3440x1440, with the graphics settings and the exact Steam launch options of each.
+wide: true
 ---
 
 # Screenshots
 
 RX 9070 XT, Mesa 26.1.8 RADV, KDE Plasma Wayland, all at **3440&times;1440 (21:9)**. MangoHud
 (top left) counts what reaches the screen; where the game has its own counter, that one shows
-the real frames. Under each capture, the graphics settings and the full Steam launch options used.
+the real frames. **Click a capture to open it at full 3440&times;1440.** Under each one, the
+graphics settings and the full Steam launch options used.
 
 {% assign common = "SteamDeck=0 PROTON_ENABLE_WAYLAND=1 MANGOHUD=1 DXVK_HDR=1 PROTON_FSR4_UPGRADE=1 PROTON_MLFG_UPGRADE=1 WINE_VK_USE_SYNC2=1 PROTON_PRIORITY_HIGH=1 PROTON_DISCORD_BRIDGE=1 PROTON_PREFER_SDL=1 PROTON_NO_STEAMINPUT=1 MESA_VK_WSI_PRESENT_MODE=mailbox AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=repeat AFMF_PACING=0 game-performance %command%" %}
 
 ## Monster Hunter Wilds &mdash; 265 fps
 
-<img src="{{ '/assets/screenshots/monster-hunter-wilds-max-rt-native-aa.jpg' | relative_url }}" alt="Monster Hunter Wilds at max settings with ray tracing and Native AA on Linux, 265 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;border-radius:8px" loading="lazy">
+{% include shot.html file="monster-hunter-wilds-max-rt-native-aa" alt="Monster Hunter Wilds at max settings with ray tracing and Native AA on Linux, 265 fps with afmf-linux" %}
 
 **Settings:** max, ray tracing on, FSR Native AA. vkd3d-proton, Proton-CachyOS Wineland. 120 fps
 without the layer.
@@ -24,7 +26,7 @@ RADV_PERFTEST=sam,nggc,rtcps {{ common }} /HID/UseISteamInput:False /WineDetecti
 
 ## Cyberpunk 2077 &mdash; 243 fps (116 real)
 
-<img src="{{ '/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-5.jpg' | relative_url }}" alt="Cyberpunk 2077 with ray tracing on Linux: MangoHud shows 243 fps with afmf-linux while the game's own counter shows 116 real frames per second" width="1920" height="804" style="width:100%;height:auto;border-radius:8px" loading="lazy">
+{% include shot.html file="cyberpunk-2077-rt-ultra-fsr-quality-5" alt="Cyberpunk 2077 with ray tracing on Linux: MangoHud shows 243 fps with afmf-linux while the game's own counter shows 116 real frames per second" %}
 
 **Settings:** RT Ultra, FSR 4 Quality, in-game frame generation on. vkd3d-proton, Proton-GE. The
 game's own counter (top centre) shows the real frames, 116; MangoHud what reaches the screen, 243.
@@ -34,16 +36,16 @@ game's own counter (top centre) shows the real frames, 116; MangoHud what reache
 RADV_PERFTEST=sam,nggc,rtcps {{ common }}
 ```
 
-<div class="numbers" style="grid-template-columns:repeat(auto-fit,minmax(14rem,1fr))">
-  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-1.jpg' | relative_url }}" alt="Cyberpunk 2077, RT Ultra, FSR 4 Quality with afmf-linux, scene 1" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
-  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-2.jpg' | relative_url }}" alt="Cyberpunk 2077, RT Ultra, FSR 4 Quality with afmf-linux, scene 2" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
-  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-3.jpg' | relative_url }}" alt="Cyberpunk 2077, RT Ultra, FSR 4 Quality with afmf-linux, scene 3" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
-  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-4.jpg' | relative_url }}" alt="Cyberpunk 2077, RT Ultra, FSR 4 Quality with afmf-linux, scene 4" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
+<div class="shots">
+{% include shot.html file="cyberpunk-2077-rt-ultra-fsr-quality-1" alt="Cyberpunk 2077, RT Ultra, FSR 4 Quality with afmf-linux, scene 1" %}
+{% include shot.html file="cyberpunk-2077-rt-ultra-fsr-quality-2" alt="Cyberpunk 2077, RT Ultra, FSR 4 Quality with afmf-linux, scene 2" %}
+{% include shot.html file="cyberpunk-2077-rt-ultra-fsr-quality-3" alt="Cyberpunk 2077, RT Ultra, FSR 4 Quality with afmf-linux, scene 3" %}
+{% include shot.html file="cyberpunk-2077-rt-ultra-fsr-quality-4" alt="Cyberpunk 2077, RT Ultra, FSR 4 Quality with afmf-linux, scene 4" %}
 </div>
 
 ## DOOM: The Dark Ages &mdash; 268 fps
 
-<img src="{{ '/assets/screenshots/doom-the-dark-ages-ultra-nightmare-fsr-quality.jpg' | relative_url }}" alt="DOOM: The Dark Ages at Ultra Nightmare with FSR Quality on Linux, 268 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;border-radius:8px" loading="lazy">
+{% include shot.html file="doom-the-dark-ages-ultra-nightmare-fsr-quality" alt="DOOM: The Dark Ages at Ultra Nightmare with FSR Quality on Linux, 268 fps with afmf-linux" %}
 
 **Settings:** Ultra Nightmare, FSR Quality. Native Vulkan (id Tech 8), Proton-GE. Two things
 specific to this game: `rtcps` crashes RADV's ray tracing pipeline compiler here, so it is left
@@ -55,13 +57,13 @@ RADV_PERFTEST=sam,nggc {{ common }}
 
 ## DOOM: The Dark Ages, Native AA + VRS &mdash; 255 fps
 
-<img src="{{ '/assets/screenshots/doom-the-dark-ages-ultra-nightmare-native-aa-vrs.jpg' | relative_url }}" alt="DOOM: The Dark Ages at Ultra Nightmare with Native AA and VRS on Linux, 255 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;border-radius:8px" loading="lazy">
+{% include shot.html file="doom-the-dark-ages-ultra-nightmare-native-aa-vrs" alt="DOOM: The Dark Ages at Ultra Nightmare with Native AA and VRS on Linux, 255 fps with afmf-linux" %}
 
 **Settings:** Ultra Nightmare, FSR Native AA, variable rate shading on. Same launch options as above.
 
 ## Overwatch 2 &mdash; 449 fps (223 real)
 
-<img src="{{ '/assets/screenshots/overwatch-2-epic-fidelityfx-quality.jpg' | relative_url }}" alt="Overwatch 2 at Epic with FidelityFX Quality on Linux: 449 fps on screen with afmf-linux, 223 real per the game's counter" width="1920" height="804" style="width:100%;height:auto;border-radius:8px" loading="lazy">
+{% include shot.html file="overwatch-2-epic-fidelityfx-quality" alt="Overwatch 2 at Epic with FidelityFX Quality on Linux: 449 fps on screen with afmf-linux, 223 real per the game's counter" %}
 
 **Settings:** Epic, FidelityFX Quality, Reduced Buffering. DXVK, Proton-GE. The game's own
 counter (top right) shows 223 real frames per second; MangoHud 449 on screen.
@@ -72,7 +74,7 @@ RADV_PERFTEST=sam,nggc,rtcps {{ common }}
 
 ## Borderlands 4 &mdash; 125 fps
 
-<img src="{{ '/assets/screenshots/borderlands-4-badass-fsr-quality.jpg' | relative_url }}" alt="Borderlands 4 at Badass settings with FSR Quality on Linux, 125 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;border-radius:8px" loading="lazy">
+{% include shot.html file="borderlands-4-badass-fsr-quality" alt="Borderlands 4 at Badass settings with FSR Quality on Linux, 125 fps with afmf-linux" %}
 
 **Settings:** Badass, FSR Quality. vkd3d-proton (Unreal Engine 5), Proton-GE.
 

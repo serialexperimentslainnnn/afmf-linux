@@ -17,6 +17,11 @@ body { margin: 0; }
 nav a { margin-right: 1.25rem; color: var(--muted); text-decoration: none; }
 nav a:hover, nav a:focus { color: var(--accent); }
 main { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+main.wide { max-width: 96rem; }
+.shot { display: block; margin: 1rem 0; }
+.shot img { display: block; width: 100%; height: auto; border-radius: 8px; }
+.shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+.shots .shot { margin: 0; }
 h1 { font-size: 2rem; line-height: 1.2; margin: .5rem 0 1rem; }
 h2 { font-size: 1.4rem; margin-top: 2.2rem; border-bottom: 1px solid var(--line); padding-bottom: .25rem; }
 h3 { font-size: 1.1rem; }

@@ -33,7 +33,7 @@ Wilds max + RT Native AA **265 fps** (120 without), Cyberpunk 2077 RT Ultra FSR 
 **449** (223 real), Borderlands 4 Badass **125**. The [screenshots](https://afmf-linux.digitalexperiments.dev/screenshots/)
 page has each capture with its settings and launch options.
 
-[![Cyberpunk 2077 with ray tracing: 243 fps on screen with afmf-linux, 116 real per the game's counter](docs/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-5.jpg)](https://afmf-linux.digitalexperiments.dev/) In Monster Hunter Wilds (vkd3d-proton) it takes 120 real fps to ~250 on
+[![Cyberpunk 2077 with ray tracing: 243 fps on screen with afmf-linux, 116 real per the game's counter](docs/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-5.jpg)](docs/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-5-full.jpg) In Monster Hunter Wilds (vkd3d-proton) it takes 120 real fps to ~250 on
 screen with 76-91 us of host time per frame; in Cyberpunk 2077 with ray tracing it doubles the
 base. Every frame gets a companion (26,380 of 26,381 in a session). Also verified on an RX 7800 XT
 (RDNA3): same results in the tests and in Cyberpunk 2077 (15,330 of 15,332 generated), at about

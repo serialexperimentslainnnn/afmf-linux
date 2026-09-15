@@ -68,8 +68,8 @@ vkd3d-proton. Other GPUs and drivers: untested, reports welcome.
 ## In games
 
 <figure style="margin:1.5rem 0">
-  <img src="{{ '/assets/screenshots/cyberpunk-2077-rt-ultra-fsr-quality-5.jpg' | relative_url }}" alt="Cyberpunk 2077 with ray tracing on Linux: MangoHud shows 243 fps on screen with afmf-linux while the game's own counter shows 116 real frames per second" width="1920" height="804" style="width:100%;height:auto;border-radius:8px" loading="lazy">
-  <figcaption style="color:var(--muted);font-size:.9em">Cyberpunk 2077, RT Ultra, FSR 4 Quality: the game's own counter (top centre) says 116 real frames per second; MangoHud (top left) counts what reaches the screen, 243.</figcaption>
+  {% include shot.html file="cyberpunk-2077-rt-ultra-fsr-quality-5" alt="Cyberpunk 2077 with ray tracing on Linux: MangoHud shows 243 fps on screen with afmf-linux while the game's own counter shows 116 real frames per second" %}
+  <figcaption style="color:var(--muted);font-size:.9em">Cyberpunk 2077, RT Ultra, FSR 4 Quality: the game's own counter (top centre) says 116 real frames per second; MangoHud (top left) counts what reaches the screen, 243. Click to open at 3440&times;1440.</figcaption>
 </figure>
 
 | Game (RX 9070 XT, 3440&times;1440, 21:9) | On screen with afmf-linux |
@@ -84,11 +84,11 @@ vkd3d-proton. Other GPUs and drivers: untested, reports welcome.
 
 Every capture with its graphics settings and the exact launch options: [screenshots]({{ '/screenshots/' | relative_url }}).
 
-<div class="numbers" style="grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))">
-  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/monster-hunter-wilds-max-rt-native-aa.jpg' | relative_url }}" alt="Monster Hunter Wilds at max settings with ray tracing and Native AA on Linux, 265 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
-  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/doom-the-dark-ages-ultra-nightmare-fsr-quality.jpg' | relative_url }}" alt="DOOM: The Dark Ages at Ultra Nightmare with FSR Quality on Linux, 268 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
-  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/borderlands-4-badass-fsr-quality.jpg' | relative_url }}" alt="Borderlands 4 at Badass settings with FSR Quality on Linux, 125 fps with afmf-linux" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
-  <div style="padding:0;overflow:hidden"><img src="{{ '/assets/screenshots/overwatch-2-epic-fidelityfx-quality.jpg' | relative_url }}" alt="Overwatch 2 at Epic with FidelityFX Quality on Linux: 449 fps on screen with afmf-linux, 223 real per the game's counter" width="1920" height="804" style="width:100%;height:auto;display:block" loading="lazy"></div>
+<div class="shots">
+{% include shot.html file="monster-hunter-wilds-max-rt-native-aa" alt="Monster Hunter Wilds at max settings with ray tracing and Native AA on Linux, 265 fps with afmf-linux" %}
+{% include shot.html file="doom-the-dark-ages-ultra-nightmare-fsr-quality" alt="DOOM: The Dark Ages at Ultra Nightmare with FSR Quality on Linux, 268 fps with afmf-linux" %}
+{% include shot.html file="borderlands-4-badass-fsr-quality" alt="Borderlands 4 at Badass settings with FSR Quality on Linux, 125 fps with afmf-linux" %}
+{% include shot.html file="overwatch-2-epic-fidelityfx-quality" alt="Overwatch 2 at Epic with FidelityFX Quality on Linux: 449 fps on screen with afmf-linux, 223 real per the game's counter" %}
 </div>
 
 The ceiling is 2&times; the base the game reaches on Linux without the layer; the layer costs

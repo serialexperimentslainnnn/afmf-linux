@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static struct afmf_config g_config;
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
@@ -50,16 +51,33 @@ static bool read_choice(const char *name, const struct choice *choices, size_t c
     return false;
 }
 
+/* Whether this process is Gamescope itself. With AFMF_GAMESCOPE=1 the same environment reaches
+ * the compositor and the game it runs, and only the game should get companions. */
+static bool process_is_gamescope(void)
+{
+    char exe[4096];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    if (n <= 0)
+        return false;
+    exe[n] = '\0';
+    const char *base = strrchr(exe, '/');
+    return strcmp(base != NULL ? base + 1 : exe, "gamescope") == 0;
+}
+
 /* Runs under pthread_once: it must not log, because logging reads the config back. */
 static void init(void)
 {
     long log_level = AFMF_LOG_WARN;
+    long gamescope = 0;
+    bool ok = read_bounded("AFMF_GAMESCOPE", 0, 1, &gamescope);
     /* Measured with vkcube on a 165 Hz Wayland desktop: a free image only comes back once the
      * compositor releases one, about one refresh period after a present. Two extra images make
-     * one available by the next present; one extra was not enough. The companion's image is
-     * acquired a frame ahead (swapchain.c, spare_*), so no wait is needed in the present hook:
-     * the timeout only bounds the wait for a spare's release, and 0 means never stall the game. */
-    long extra_images = 2;
+     * one available by the next present; one extra was not enough. Gamescope keeps more images
+     * in flight (direct scanout): with 2 extra a third of the presents found a free one, with 4
+     * most, with 5 all of them, and 3 + 5 stays within the 8 some engines accept. The companion's
+     * image is acquired a frame ahead (swapchain.c, spare_*), so no wait is needed in the present
+     * hook: the timeout only bounds the wait for a spare's release, and 0 means never stall. */
+    long extra_images = gamescope != 0 ? 5 : 2;
     long acquire_timeout_us = 0;
     long interpolate = 1;
     /* ADLX search mode: standard keeps the search to 5 pyramid levels (+-128 px), high uses all 7
@@ -82,7 +100,7 @@ static void init(void)
                                                      {"quality", AFMF_PERFORMANCE_QUALITY},
                                                      {"performance", AFMF_PERFORMANCE_FAST}};
 
-    bool ok = read_bounded("AFMF_LOG", AFMF_LOG_ERROR, AFMF_LOG_DEBUG, &log_level);
+    ok = read_bounded("AFMF_LOG", AFMF_LOG_ERROR, AFMF_LOG_DEBUG, &log_level) && ok;
     ok = read_bounded("AFMF_EXTRA_IMAGES", 1, 8, &extra_images) && ok;
     ok = read_bounded("AFMF_ACQUIRE_TIMEOUT_US", 0, 100000, &acquire_timeout_us) && ok;
     ok = read_bounded("AFMF_INTERPOLATE", 0, 1, &interpolate) && ok;
@@ -106,6 +124,7 @@ static void init(void)
     g_config.profile = profile != 0 || log_level >= AFMF_LOG_DEBUG;
     g_config.async = async != 0;
     g_config.pacing = pacing != 0;
+    g_config.passive = gamescope != 0 && process_is_gamescope();
     g_config.invalid = !ok;
 }
 

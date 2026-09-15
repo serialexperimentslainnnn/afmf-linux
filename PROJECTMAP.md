@@ -37,7 +37,7 @@ has no interpolation variant fall back to repeating the previous frame.
 | Layer manifest (name, enable/disable env vars) | `layer/afmf-linux.json.in` | Generated twice: build tree path and install path |
 | Build flags, shader compilation, sanitizers, tests, install | `CMakeLists.txt` | `afmf_glsl()`, `AFMF_WARNINGS`, `AFMF_SANITIZE`, `add_test(headless)`, `install()` |
 | SPIR-V embedding | `cmake/embed_spirv.cmake` | `.spv` -> `uint32_t` arrays in `build/shaders/afmf_spirv.h` |
-| Headless integration test (validation, generation count, golden check) | `tests/headless.c` | Synthetic sliding square; reads the layer's PPM dumps; `AFMF_TEST_ALL_QUEUES=1` takes every compute queue like vkd3d-proton (ctest `headless_shared_queue`); `AFMF_TEST_FRAMES`, `AFMF_TEST_FRAME_MS` pace it like a game to see the pacing hold |
+| Headless integration test (validation, generation count, golden check) | `tests/headless.c` | Synthetic sliding square; reads the layer's PPM dumps; `AFMF_TEST_ALL_QUEUES=1` takes every compute queue like vkd3d-proton (ctest `headless_shared_queue`); `AFMF_TEST_FRAMES`, `AFMF_TEST_FRAME_MS` pace it like a game to see the pacing hold; `AFMF_TEST_EXTRA_IMAGES=n` requires n images added (ctest `headless_gamescope`); a copy of the binary named `gamescope` under `build/tests-as/` checks the pass-through of the gamescope process (ctest `headless_gamescope_passive`) |
 | Real-window smoke test | `tests/smoke.sh` | vkcube, implicit enable via `AFMF_ENABLE=1`, negative control |
 
 ## Structure
@@ -73,7 +73,8 @@ has no interpolation variant fall back to repeating the previous frame.
 | `AFMF_ENABLE=1` | unset | Loads the layer implicitly (manifest `enable_environment`) |
 | `DISABLE_AFMF=1` | unset | Keeps it out even if enabled |
 | `AFMF_LOG` | `1` | 0 error, 1 warn, 2 info, 3 debug (stderr) |
-| `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the app asked (1..8) |
+| `AFMF_GAMESCOPE` | unset | `1` under Gamescope: extra images default to 5, and `config.passive` (process is `gamescope` itself, `/proc/self/exe`) makes `generation_blocker` pass every swapchain through |
+| `AFMF_EXTRA_IMAGES` | `2` (`5` with `AFMF_GAMESCOPE`) | Swapchain images added beyond what the app asked (1..8) |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest wait for the spare image's release before presenting without a companion; the spare is acquired a frame ahead (`spare_*`) |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_SEARCH_MODE` | `auto` | `standard` = 5 pyramid levels, `high` = 7; `auto` = 7 at full flow resolution, 5 at half (`fg->levels`) |

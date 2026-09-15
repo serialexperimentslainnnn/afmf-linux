@@ -185,6 +185,31 @@ set_tests_properties(headless_shared_queue PROPERTIES
     SKIP_RETURN_CODE 77
 )
 
+# Under Gamescope (AFMF_GAMESCOPE=1) the layer asks for five extra images instead of two, and
+# still generates every frame.
+add_test(NAME headless_gamescope COMMAND afmf_headless)
+set_tests_properties(headless_gamescope PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-gamescope;AFMF_GAMESCOPE=1;AFMF_TEST_EXTRA_IMAGES=5;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
+    FAIL_REGULAR_EXPRESSION "validation error|^failed|expected at least"
+    SKIP_RETURN_CODE 77
+)
+
+# The same variable reaches gamescope itself, which must get no companions: the test binary runs
+# under that name (the layer looks at /proc/self/exe, so a copy, not a symlink) and every
+# swapchain of it passes through.
+add_custom_command(TARGET afmf_headless POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/tests-as
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:afmf_headless> ${CMAKE_BINARY_DIR}/tests-as/gamescope
+    VERBATIM)
+add_test(NAME headless_gamescope_passive COMMAND ${CMAKE_BINARY_DIR}/tests-as/gamescope)
+set_tests_properties(headless_gamescope_passive PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_GAMESCOPE=1;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "pass-through \\(this process is Gamescope itself"
+    FAIL_REGULAR_EXPRESSION "validation error|^failed|generation on"
+    SKIP_RETURN_CODE 77
+)
+
 if(AFMF_SANITIZE)
     foreach(target afmf-linux afmf_headless)
         target_compile_options(${target} PRIVATE ${AFMF_SANITIZE_FLAGS})

@@ -360,6 +360,8 @@ static const char *generation_blocker(const struct afmf_device *dev,
 {
     const VkImageUsageFlags copy_usage =
         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (afmf_config_get()->passive)
+        return "this process is Gamescope itself (AFMF_GAMESCOPE=1); the game inside gets the layer";
     if (dev->ifns.get_surface_capabilities == NULL ||
         dev->ifns.get_surface_capabilities(dev->physical_device, info->surface, caps) != VK_SUCCESS)
         return "surface capabilities unavailable";

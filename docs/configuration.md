@@ -16,7 +16,8 @@ names mirror the settings AMD exposes for AFMF on Windows where such a setting e
 | `AFMF_PERFORMANCE_MODE` | `auto` | `quality`: optical flow at display resolution (8 px blocks). `performance`: at half resolution (16 px blocks), about 2.5x cheaper. `auto`: `performance` from 2560x1440 up |
 | `AFMF_SEARCH_MODE` | `auto` | `standard`: 5 pyramid levels. `high`: 7 levels, motion up to +-512 flow pixels. `auto`: 7 at full resolution, 5 at half |
 | `AFMF_FAST_MOTION_RESPONSE` | `repeat` | What to show where the flow is unreliable: `repeat` the previous frame, or `blend` both |
-| `AFMF_EXTRA_IMAGES` | `2` | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory. Gamescope needs `4` or `5`; some engines abort above 8 images in total (id Tech 8) |
+| `AFMF_GAMESCOPE` | unset | `1` when the game runs under Gamescope (Steam Deck, or `gamescope -- <game>`): five extra images instead of two, and the layer passes through in the gamescope process itself |
+| `AFMF_EXTRA_IMAGES` | `2` (`5` with `AFMF_GAMESCOPE=1`) | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory; some engines abort above 8 images in total (id Tech 8) |
 | `AFMF_ACQUIRE_TIMEOUT_US` | `0` | Longest the layer waits for the companion's image to be released before presenting the real frame alone. The image is requested a frame ahead, so the default never stalls the game |
 | `AFMF_ASYNC` | `1` | `0` runs the work on the application's queue and presents inline (diagnosis) |
 | `AFMF_PACING` | `1` | `0` presents the real frame right behind the generated one instead of half a frame later: uneven cadence, the compositor may drop generated frames |
@@ -33,7 +34,8 @@ names mirror the settings AMD exposes for AFMF on Windows where such a setting e
 **Without pacing** (uneven cadence, the compositor may drop generated frames above the refresh
 rate): add `AFMF_PACING=0`.
 
-**Under Gamescope**: add `AFMF_EXTRA_IMAGES=4` (or `5`); see the [FAQ]({{ '/faq/' | relative_url }}).
+**Under Gamescope** (Steam Deck, or nested on the desktop): `AFMF_ENABLE=1 AFMF_GAMESCOPE=1`, on
+the gamescope command line or in the Steam launch options; see the [FAQ]({{ '/faq/' | relative_url }}).
 
 **Diagnosis**: add `AFMF_LOG=2 AFMF_PROFILE=1` and `2>afmf.log` after `%command%`; attach the file
 to a bug report.
@@ -52,7 +54,7 @@ to a bug report.
 - **real fps** is the game's own rate; MangoHud shows roughly twice that.
 - **no free image** counts presents that got no companion because the presentation engine had no
   image to give; a game in FIFO at the display's refresh rate has none to give, and Gamescope
-  keeps more in flight than a desktop compositor (raise `AFMF_EXTRA_IMAGES`).
+  keeps more in flight than a desktop compositor (`AFMF_GAMESCOPE=1`).
 - **in the layer** is host time on the game's thread per present; **presentation thread** is the
   layer's own thread, off the game's critical path.
 - **pacing hold** is how long the real frame was held back: half the frame time.

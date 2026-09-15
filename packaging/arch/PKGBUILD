@@ -9,7 +9,7 @@ license=('MIT')
 depends=('vulkan-icd-loader')
 makedepends=('cmake' 'ninja' 'gcc' 'vulkan-headers' 'glslang' 'spirv-tools')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/serialexperimentslainnnn/afmf-linux/archive/v$pkgver.tar.gz")
-sha256sums=('SKIP') # set from the release tarball once the tag exists (it cannot contain its own hash)
+sha256sums=('c0b88b8b17cfdc97c53c71033551400b29a995a426169e08bf394e0f3cbda2f0')
 
 build() {
   cmake -S "$pkgname-$pkgver" -B build -G Ninja \

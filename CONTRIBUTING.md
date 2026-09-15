@@ -21,7 +21,7 @@ the static analyser.
 
 - **A number.** Performance changes come with the before/after from `AFMF_PROFILE=1` (GPU time
   per stage, host time per present) at the resolution you tested, and the game or the headless
-  test it was measured with. `PROJECTMAP.md` has the performance register; add a row.
+  test it was measured with. `docs/performance.md` has the register; add a row.
 - **The golden test still passes.** `tests/headless.c` checks that the generated frame shows the
   synthetic square exactly halfway between the real ones; if your change moves that, say why.
 - **Validation clean.** The headless tests run under `VK_LAYER_KHRONOS_validation`, thread safety

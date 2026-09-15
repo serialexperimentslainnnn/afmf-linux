@@ -33,6 +33,9 @@ struct afmf_device_fns {
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier;
     PFN_vkCmdCopyImage cmd_copy_image;
     PFN_vkQueueSubmit queue_submit;
+    PFN_vkQueueSubmit2 queue_submit2;
+    PFN_vkQueueSubmit2KHR queue_submit2_khr;
+    PFN_vkQueueBindSparse queue_bind_sparse;
     PFN_vkQueueWaitIdle queue_wait_idle;
 
     PFN_vkCreateShaderModule create_shader_module;
@@ -117,6 +120,11 @@ struct afmf_device {
     VkQueue async_queue;
     uint32_t async_family;
     bool async_high_priority; /* VK_KHR_global_priority HIGH was granted for it */
+    /* The application took every queue of every compute family (vkd3d-proton asks for all four
+     * of RADV's), so `async_queue` is the last one it created: its own queue-level calls on it
+     * are routed through `async_lock` too (afmf_Queue* in layer.c), since a VkQueue is
+     * externally synchronised. Applications rarely touch their last compute queue. */
+    bool async_shared;
     pthread_mutex_t async_lock; /* the application may present from several threads */
     uint32_t *app_families;
     uint32_t app_family_count;
@@ -133,3 +141,8 @@ struct afmf_device {
 
 /* The queue family a queue was created from; false when the layer never saw the queue. */
 bool afmf_device_queue_family(struct afmf_device *dev, VkQueue queue, uint32_t *family);
+
+/* The application's own present, passed down; serialised with the layer when the queue is the
+ * shared one. */
+VkResult afmf_device_queue_present(struct afmf_device *dev, VkQueue queue,
+                                   const VkPresentInfoKHR *info);

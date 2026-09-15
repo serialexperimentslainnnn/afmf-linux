@@ -198,20 +198,51 @@ static bool pick_physical_device(struct ctx *ctx)
     return found;
 }
 
+#define MAX_FAMILIES 16u
+#define MAX_QUEUES 16u
+
 static bool create_device_and_swapchain(struct ctx *ctx)
 {
-    const float priority = 1.0f;
+    static const float priorities[MAX_QUEUES] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                                                 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     const char *extensions[1] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-    VkDeviceQueueCreateInfo queue = {
+    VkDeviceQueueCreateInfo queues[MAX_FAMILIES] = {{
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
         .queueFamilyIndex = ctx->queue_family,
         .queueCount = 1,
-        .pQueuePriorities = &priority,
-    };
+        .pQueuePriorities = priorities,
+    }};
+    uint32_t queue_info_count = 1;
+    /* AFMF_TEST_ALL_QUEUES=1: take every queue of every compute-capable family, as vkd3d-proton
+     * does, so the layer has to share one of ours instead of getting its own. */
+    const char *all = getenv("AFMF_TEST_ALL_QUEUES");
+    if (all != NULL && strcmp(all, "1") == 0) {
+        uint32_t families = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(ctx->physical_device, &families, NULL);
+        VkQueueFamilyProperties props[MAX_FAMILIES];
+        if (families > MAX_FAMILIES)
+            families = MAX_FAMILIES;
+        vkGetPhysicalDeviceQueueFamilyProperties(ctx->physical_device, &families, props);
+        for (uint32_t f = 0; f < families; f++) {
+            if (!(props[f].queueFlags & VK_QUEUE_COMPUTE_BIT))
+                continue;
+            uint32_t n = props[f].queueCount < MAX_QUEUES ? props[f].queueCount : MAX_QUEUES;
+            if (f == ctx->queue_family) {
+                queues[0].queueCount = n;
+                continue;
+            }
+            queues[queue_info_count++] = (VkDeviceQueueCreateInfo){
+                .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .queueFamilyIndex = f,
+                .queueCount = n,
+                .pQueuePriorities = priorities,
+            };
+        }
+    }
     VkDeviceCreateInfo device = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &queue,
+        .queueCreateInfoCount = queue_info_count,
+        .pQueueCreateInfos = queues,
         .enabledExtensionCount = 1,
         .ppEnabledExtensionNames = extensions,
     };

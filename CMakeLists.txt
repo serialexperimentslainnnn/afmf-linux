@@ -163,6 +163,16 @@ set_tests_properties(headless_performance PROPERTIES
     SKIP_RETURN_CODE 77
 )
 
+# The application holds every compute queue (vkd3d-proton does): the layer must share the last one,
+# serialising the application's submits on it, and still generate every frame.
+add_test(NAME headless_shared_queue COMMAND afmf_headless)
+set_tests_properties(headless_shared_queue PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf-shared;AFMF_TEST_ALL_QUEUES=1;AFMF_ACQUIRE_TIMEOUT_US=16000"
+    PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
+    FAIL_REGULAR_EXPRESSION "validation error|^failed|layer queue on family|no compute queue to use"
+    SKIP_RETURN_CODE 77
+)
+
 if(AFMF_SANITIZE)
     foreach(target afmf-linux afmf_headless)
         target_compile_options(${target} PRIVATE ${AFMF_SANITIZE_FLAGS})

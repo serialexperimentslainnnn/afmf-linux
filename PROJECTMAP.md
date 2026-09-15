@@ -23,6 +23,7 @@ has no interpolation variant fall back to repeating the previous frame.
 | The present flow: take the spare, submit, two presents, refill the spare | `src/swapchain.c` `present_generated`, `spare_take`, `spare_refill` | On `dev->async_queue` when the swapchain is `sc->async`; never waits for the presentation engine (`AFMF_ACQUIRE_TIMEOUT_US=0`) |
 | Host time the game's thread spends in the layer | `src/swapchain.c` `update_cadence` | Every 300 presents with `AFMF_PROFILE=1`: real fps, hook/fence/acquire/present us |
 | The layer's own compute queue (family choice, extra queue request) | `src/layer.c` `choose_async_family`, `queues_with_extra` | Stamped with `pfnSetDeviceLoaderData` like command buffers |
+| Sharing the application's last compute queue when none is spare | `src/layer.c` `choose_shared_family`, `afmf_Queue*` hooks, `afmf_device_queue_present` | vkd3d-proton takes all 4 of RADV's; the application's submits on that queue go through `async_lock` |
 | Why a swapchain falls back to pass-through | `src/swapchain.c` `generation_blocker` | Logged at INFO with the reason |
 | Swapchain creation patch (extra images, transfer usage) | `src/swapchain.c` `afmf_swapchain_create` | |
 | Loader plumbing, dispatch tables, hooked functions | `src/layer.c` | `instance_hooks` / `device_hooks` / `swapchain_hooks` |
@@ -32,7 +33,7 @@ has no interpolation variant fall back to repeating the previous frame.
 | Layer manifest (name, enable/disable env vars) | `layer/afmf-linux.json.in` | Generated twice: build tree path and install path |
 | Build flags, shader compilation, sanitizers, tests, install | `CMakeLists.txt` | `afmf_glsl()`, `AFMF_WARNINGS`, `AFMF_SANITIZE`, `add_test(headless)`, `install()` |
 | SPIR-V embedding | `cmake/embed_spirv.cmake` | `.spv` -> `uint32_t` arrays in `build/shaders/afmf_spirv.h` |
-| Headless integration test (validation, generation count, golden check) | `tests/headless.c` | Synthetic sliding square; reads the layer's PPM dumps |
+| Headless integration test (validation, generation count, golden check) | `tests/headless.c` | Synthetic sliding square; reads the layer's PPM dumps; `AFMF_TEST_ALL_QUEUES=1` takes every compute queue like vkd3d-proton (ctest `headless_shared_queue`) |
 | Real-window smoke test | `tests/smoke.sh` | vkcube, implicit enable via `AFMF_ENABLE=1`, negative control |
 
 ## Structure
@@ -77,6 +78,7 @@ shaders, the driver or the resolution change; review this table with every optim
 | 2026-09-15 | `631b0c0` + profiler | 1222 us | block search 85 % (1038 us); everything else < 40 us each | Baseline; all on the application's queue |
 | 2026-09-15 | async queue | 1222 us (unchanged) | same | Work and presents moved to the layer's compute queue (RADV family 1); headless host critical path 5.58 -> 4.82 ms median of 3 (host is upload-bound, not a game proxy) |
 | 2026-09-15 | performance mode | 493 us on the app queue (quality 1224) | search 331 us (67 %) | Flow at half resolution; golden test identical. On the compute queue the same work reads 1395 us (quality 4329) of wall time: the ACE shares the GPU with graphics and the idle host lowers clocks; the host's own frame is still shorter with async (4.24 vs 4.70 ms) |
+| 2026-09-15 | shared compute queue | MH Wilds (vkd3d-proton) log: the layer had **never** had its own queue there, the game takes all 4 compute queues; 517 us of GPU work ran on the graphics queue in series with rendering, plus 340-590 us of host time in the two FIFO presents | now: the game's compute queue 3, shared under `async_lock` | Headless at 3440x1440 with all queues taken: 119/120 generated, validation clean, 602 us wall on the shared queue |
 | 2026-09-15 | spare image, no acquire wait | host: 5,900 -> 60 us per present in the hook (vkcube, FIFO 165 Hz); GPU unchanged | acquire wait was 5,100-5,900 us of it | The companion's image is acquired a frame ahead with timeout 0 and its release fence waited on the host at use time. In mailbox/immediate vkcube generates 995 of 996 with a 40 us hook; in FIFO at the refresh rate it generates nothing, which is right. Explains MH Wilds: base 120 real fps, 92 with the layer = 2.5 ms per frame lost, 0.43 of them GPU |
 | 2026-09-15 | 5 levels at half + scoped barriers | 434 us (433-445, N=3) | search 298 us (69 %) | Two coarsest levels dropped in `auto` at half resolution (they searched +-256/+-512 screen px for 46 us), compute-only barriers between passes, none between pyramid and SCD histogram. Measured and rejected: wave32 for compute (`RADV_PERFTEST=cswave32`: search unchanged, total +17 us); native SAD (`v_sad_u8`/`v_msad_u8`) is unreachable from GLSL, ACO emits neither for any SAD shape |
 
@@ -110,6 +112,11 @@ shaders, the driver or the resolution change; review this table with every optim
   refused) must reset it to the link this layer handed down, or the next layer dereferences NULL.
 - **High global priority for the layer's queue needs `CAP_SYS_NICE`** (amdgpu's rule for anything
   above NORMAL); a regular game process gets the fallback and the log says `(normal priority)`.
+- **vkd3d-proton asks for every queue of every family** (4 compute on RADV), so `choose_async_family`
+  finds no spare in DX12 titles; the layer then shares the application's last compute queue and
+  hooks `vkQueueSubmit`/`Submit2`/`Submit2KHR`/`BindSparse`/`WaitIdle`/`PresentKHR` to serialise the
+  application's use of that one queue with its own (`async_lock`). `AFMF_LOG=3` prints what the
+  application asked for. Debug-label queue calls are not hooked: harmless races on a label.
 - **Async queue semantics**: swapchains are re-created `CONCURRENT` across the application's
   families and ours so images i/j need no ownership transfers; both presents happen on our queue
   (RADV reports present support on its compute family; checked per surface, fallback is the

@@ -17,7 +17,9 @@ shaders for the motion estimation and a small interpolation shader of its own.
    between the previous frame and the new one, and synthesises the frame in between by warping both
    along half the estimated motion.
 3. The generated frame is presented first, the real frame right after it. All of this runs on a
-   compute queue of the layer's own, so the application's graphics queue never waits for it.
+   compute queue of the layer's own (or, when the application took every compute queue, as
+   vkd3d-proton does, on the application's last one, serialised with its use), so the graphics
+   queue never waits for it.
 
 Where the flow cannot be trusted (scene cut, motion beyond 64 px) the pixel falls back to the
 previous frame or to a blend, selectable with `AFMF_FAST_MOTION_RESPONSE`.

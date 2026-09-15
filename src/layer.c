@@ -140,6 +140,26 @@ static uint32_t choose_async_family(const struct afmf_device *dev, const VkDevic
     return UINT32_MAX;
 }
 
+/* When no family has a spare queue: the application's last queue in a compute family, compute
+ * without graphics first. Returns UINT32_MAX when the application created no compute queue. */
+static uint32_t choose_shared_family(const struct afmf_device *dev, const VkDeviceCreateInfo *info,
+                                     uint32_t *index)
+{
+    for (int compute_only = 1; compute_only >= 0; compute_only--) {
+        for (uint32_t i = 0; i < info->queueCreateInfoCount; i++) {
+            const VkDeviceQueueCreateInfo *q = &info->pQueueCreateInfos[i];
+            VkQueueFlags flags = dev->queue_families[q->queueFamilyIndex].queueFlags;
+            if (!(flags & VK_QUEUE_COMPUTE_BIT) || (compute_only && (flags & VK_QUEUE_GRAPHICS_BIT)))
+                continue;
+            if (q->queueCount == 0 || (q->flags & VK_DEVICE_QUEUE_CREATE_PROTECTED_BIT))
+                continue;
+            *index = q->queueCount - 1;
+            return q->queueFamilyIndex;
+        }
+    }
+    return UINT32_MAX;
+}
+
 static bool device_extension_available(struct afmf_instance *inst, VkPhysicalDevice pd,
                                        const char *name)
 {
@@ -392,6 +412,9 @@ static bool load_device_fns(struct afmf_device *dev, PFN_vkGetDeviceProcAddr nex
     LOAD_DEVICE_FN(cmd_pipeline_barrier, vkCmdPipelineBarrier);
     LOAD_DEVICE_FN(cmd_copy_image, vkCmdCopyImage);
     LOAD_DEVICE_FN(queue_submit, vkQueueSubmit);
+    LOAD_DEVICE_FN(queue_submit2, vkQueueSubmit2);
+    LOAD_DEVICE_FN(queue_submit2_khr, vkQueueSubmit2KHR);
+    LOAD_DEVICE_FN(queue_bind_sparse, vkQueueBindSparse);
     LOAD_DEVICE_FN(queue_wait_idle, vkQueueWaitIdle);
     LOAD_DEVICE_FN(create_shader_module, vkCreateShaderModule);
     LOAD_DEVICE_FN(destroy_shader_module, vkDestroyShaderModule);
@@ -590,14 +613,20 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
     dev->key = dispatch_key(*out);
     dev->handle = *out;
 
+    if (async_family == UINT32_MAX && dev->set_loader_data != NULL && afmf_config_get()->async) {
+        async_family = choose_shared_family(dev, info, &async_index);
+        dev->async_shared = async_family != UINT32_MAX;
+    }
     if (async_family != UINT32_MAX) {
         /* Obtained below the loader's trampoline: stamp the dispatch pointer, as for command
-         * buffers, or the next layer cannot route calls made with it. */
+         * buffers, or the next layer cannot route calls made with it. (A shared queue gets the
+         * same stamp again when the application fetches it; the loader's value is identical.) */
         dev->fns.get_device_queue(*out, async_family, async_index, &dev->async_queue);
         if (dev->async_queue != VK_NULL_HANDLE &&
             dev->set_loader_data(*out, dev->async_queue) != VK_SUCCESS)
             dev->async_queue = VK_NULL_HANDLE;
         dev->async_family = async_family;
+        dev->async_shared = dev->async_shared && dev->async_queue != VK_NULL_HANDLE;
     }
 
     pthread_mutex_lock(&g_lock);
@@ -605,15 +634,113 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
     g_devices = dev;
     pthread_mutex_unlock(&g_lock);
 
-    if (dev->async_queue != VK_NULL_HANDLE)
+    if (dev->async_queue != VK_NULL_HANDLE && !dev->async_shared)
         AFMF_INFO("device %p created, VK_KHR_swapchain %s, layer queue on family %u (%s priority)",
                   (void *)*out, dev->fns.queue_present != NULL ? "enabled" : "not enabled",
                   dev->async_family, dev->async_high_priority ? "high" : "normal");
+    else if (dev->async_queue != VK_NULL_HANDLE)
+        AFMF_INFO("device %p created, VK_KHR_swapchain %s, no spare compute queue: sharing the "
+                  "application's queue %u of family %u",
+                  (void *)*out, dev->fns.queue_present != NULL ? "enabled" : "not enabled",
+                  async_index, dev->async_family);
     else
-        AFMF_INFO("device %p created, VK_KHR_swapchain %s, no spare compute queue: working on "
-                  "the application's",
+        AFMF_INFO("device %p created, VK_KHR_swapchain %s, no compute queue to use: working on "
+                  "the presenting queue",
                   (void *)*out, dev->fns.queue_present != NULL ? "enabled" : "not enabled");
+    for (uint32_t i = 0; i < info->queueCreateInfoCount; i++)
+        AFMF_DEBUG("device %p: application asked for %u queue(s) in family %u", (void *)*out,
+                   info->pQueueCreateInfos[i].queueCount,
+                   info->pQueueCreateInfos[i].queueFamilyIndex);
     return VK_SUCCESS;
+}
+
+/* ---- queue-level calls on the shared queue ------------------------------------------------- */
+
+static bool shared_queue(struct afmf_device *dev, VkQueue queue)
+{
+    return dev->async_shared && queue == dev->async_queue;
+}
+
+VkResult afmf_device_queue_present(struct afmf_device *dev, VkQueue queue,
+                                   const VkPresentInfoKHR *info)
+{
+    if (!shared_queue(dev, queue))
+        return dev->fns.queue_present(queue, info);
+    pthread_mutex_lock(&dev->async_lock);
+    VkResult res = dev->fns.queue_present(queue, info);
+    pthread_mutex_unlock(&dev->async_lock);
+    return res;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueSubmit(VkQueue queue, uint32_t count,
+                                                       const VkSubmitInfo *submits, VkFence fence)
+{
+    struct afmf_device *dev = device_find(dispatch_key(queue));
+    if (dev == NULL)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if (!shared_queue(dev, queue))
+        return dev->fns.queue_submit(queue, count, submits, fence);
+    pthread_mutex_lock(&dev->async_lock);
+    VkResult res = dev->fns.queue_submit(queue, count, submits, fence);
+    pthread_mutex_unlock(&dev->async_lock);
+    return res;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueSubmit2(VkQueue queue, uint32_t count,
+                                                        const VkSubmitInfo2 *submits, VkFence fence)
+{
+    struct afmf_device *dev = device_find(dispatch_key(queue));
+    if (dev == NULL || dev->fns.queue_submit2 == NULL)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if (!shared_queue(dev, queue))
+        return dev->fns.queue_submit2(queue, count, submits, fence);
+    pthread_mutex_lock(&dev->async_lock);
+    VkResult res = dev->fns.queue_submit2(queue, count, submits, fence);
+    pthread_mutex_unlock(&dev->async_lock);
+    return res;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueSubmit2KHR(VkQueue queue, uint32_t count,
+                                                           const VkSubmitInfo2 *submits,
+                                                           VkFence fence)
+{
+    struct afmf_device *dev = device_find(dispatch_key(queue));
+    if (dev == NULL || dev->fns.queue_submit2_khr == NULL)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if (!shared_queue(dev, queue))
+        return dev->fns.queue_submit2_khr(queue, count, submits, fence);
+    pthread_mutex_lock(&dev->async_lock);
+    VkResult res = dev->fns.queue_submit2_khr(queue, count, submits, fence);
+    pthread_mutex_unlock(&dev->async_lock);
+    return res;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueBindSparse(VkQueue queue, uint32_t count,
+                                                           const VkBindSparseInfo *binds,
+                                                           VkFence fence)
+{
+    struct afmf_device *dev = device_find(dispatch_key(queue));
+    if (dev == NULL || dev->fns.queue_bind_sparse == NULL)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if (!shared_queue(dev, queue))
+        return dev->fns.queue_bind_sparse(queue, count, binds, fence);
+    pthread_mutex_lock(&dev->async_lock);
+    VkResult res = dev->fns.queue_bind_sparse(queue, count, binds, fence);
+    pthread_mutex_unlock(&dev->async_lock);
+    return res;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueWaitIdle(VkQueue queue)
+{
+    struct afmf_device *dev = device_find(dispatch_key(queue));
+    if (dev == NULL)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if (!shared_queue(dev, queue))
+        return dev->fns.queue_wait_idle(queue);
+    pthread_mutex_lock(&dev->async_lock);
+    VkResult res = dev->fns.queue_wait_idle(queue);
+    pthread_mutex_unlock(&dev->async_lock);
+    return res;
 }
 
 static VKAPI_ATTR void VKAPI_CALL afmf_DestroyDevice(VkDevice device,
@@ -708,6 +835,8 @@ static const struct hook instance_hooks[] = {
 
 static const struct hook device_hooks[] = {
     HOOK(GetDeviceProcAddr), HOOK(DestroyDevice), HOOK(GetDeviceQueue), HOOK(GetDeviceQueue2),
+    HOOK(QueueSubmit),       HOOK(QueueSubmit2),  HOOK(QueueSubmit2KHR), HOOK(QueueBindSparse),
+    HOOK(QueueWaitIdle),
 };
 
 /* Only handed out when the next layer/driver has them, i.e. when VK_KHR_swapchain is enabled. */

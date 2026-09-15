@@ -630,7 +630,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     if (!ensure_pool(dev, sc, family) || i >= sc->image_count ||
         info->waitSemaphoreCount > AFMF_MAX_APP_WAITS) {
         gen_disable(sc, "cannot generate on this present path");
-        return f->queue_present(queue, info);
+        return afmf_device_queue_present(dev, queue, info);
     }
 
     struct timespec t_start, t_fence, t_acquire, t_present, t_end;
@@ -687,7 +687,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
         /* The application's semaphores were not consumed, so its own present still works. The
          * image acquired for the generated frame, if any, stays with the presentation engine. */
         gen_disable(sc, "layer submission failed");
-        return f->queue_present(queue, info);
+        return afmf_device_queue_present(dev, queue, info);
     }
     slot->pending = true;
     sc->slot_index = (sc->slot_index + 1) % sc->image_count;
@@ -751,12 +751,12 @@ VkResult afmf_swapchain_present(struct afmf_device *dev, VkQueue queue, const Vk
             if (each != NULL)
                 update_cadence(dev, each);
         }
-        return dev->fns.queue_present(queue, info);
+        return afmf_device_queue_present(dev, queue, info);
     }
 
     update_cadence(dev, sc);
     uint32_t family;
     if (!sc->gen_enabled || !afmf_device_queue_family(dev, queue, &family))
-        return dev->fns.queue_present(queue, info);
+        return afmf_device_queue_present(dev, queue, info);
     return present_generated(dev, sc, queue, family, info);
 }

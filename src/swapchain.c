@@ -1,6 +1,7 @@
 #include "swapchain.h"
 
 #include "config.h"
+#include "framegen.h"
 #include "log.h"
 
 #include <inttypes.h>
@@ -39,7 +40,8 @@ struct afmf_swapchain {
     uint32_t slot_index;
     VkCommandPool pool;
     uint32_t pool_family;
-    VkImage history;            /* the previous real frame */
+    struct afmf_framegen *fg;   /* optical flow + interpolation; NULL means repeat frames */
+    VkImage history;            /* the previous real frame, only used when fg is NULL */
     VkDeviceMemory history_memory;
     VkImageLayout history_layout;
     bool have_history;
@@ -164,7 +166,9 @@ static VkResult gen_init(struct afmf_device *dev, struct afmf_swapchain *sc)
         if (res != VK_SUCCESS)
             return res;
     }
-    return create_history(dev, sc);
+    if (afmf_config_get()->interpolate)
+        sc->fg = afmf_framegen_create(dev, sc->format, sc->extent, sc->image_count);
+    return sc->fg != NULL ? VK_SUCCESS : create_history(dev, sc);
 }
 
 /* The command pool needs the presenting queue's family, only known at the first present. */
@@ -227,6 +231,8 @@ static void gen_teardown(struct afmf_device *dev, struct afmf_swapchain *sc)
     }
     if (sc->pool != VK_NULL_HANDLE)
         f->destroy_command_pool(dev->handle, sc->pool, NULL); /* frees the command buffers */
+    afmf_framegen_destroy(dev, sc->fg);
+    sc->fg = NULL;
     for (uint32_t i = 0; i < sc->image_count; i++) {
         if (sc->sem_generated != NULL && sc->sem_generated[i] != VK_NULL_HANDLE)
             f->destroy_semaphore(dev->handle, sc->sem_generated[i], NULL);
@@ -414,10 +420,12 @@ static void copy_whole(const struct afmf_device *dev, VkCommandBuffer cmd, VkIma
                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 }
 
-/* Records: [history -> image j] when generating, then image i -> history. Image i arrives in
- * PRESENT_SRC (the application's obligation) and is handed back in PRESENT_SRC. */
+/* Records the companion for image i (frame N+1) into image j, and remembers frame N+1 for next
+ * time. With interpolation: the optical flow and the interpolated frame (framegen.c). Without it:
+ * a copy of the history image into j. Image i arrives in PRESENT_SRC (the application's
+ * obligation) and is handed back in PRESENT_SRC. */
 static VkResult record_frame(struct afmf_device *dev, struct afmf_swapchain *sc, VkCommandBuffer cmd,
-                             uint32_t i, bool generate, uint32_t j)
+                             uint32_t slot, uint32_t i, bool generate, uint32_t j)
 {
     VkCommandBufferBeginInfo begin = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -430,6 +438,26 @@ static VkResult record_frame(struct afmf_device *dev, struct afmf_swapchain *sc,
     const VkPipelineStageFlags top = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
     const VkPipelineStageFlags transfer = VK_PIPELINE_STAGE_TRANSFER_BIT;
     const VkPipelineStageFlags bottom = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+
+    if (sc->fg != NULL) {
+        image_barrier(dev, cmd, sc->images[i], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT, top,
+                      transfer);
+        if (generate)
+            image_barrier(dev, cmd, sc->images[j], VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT, top,
+                          transfer);
+        afmf_framegen_record(dev, sc->fg, cmd, slot, sc->images[i],
+                             generate ? sc->images[j] : VK_NULL_HANDLE);
+        if (generate)
+            image_barrier(dev, cmd, sc->images[j], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0, transfer,
+                          bottom);
+        image_barrier(dev, cmd, sc->images[i], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                      VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_READ_BIT, 0, transfer,
+                      bottom);
+        return dev->fns.end_command_buffer(cmd);
+    }
 
     if (generate) {
         image_barrier(dev, cmd, sc->images[j], VK_IMAGE_LAYOUT_UNDEFINED,
@@ -524,7 +552,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
         sc->skipped_no_history++;
     }
 
-    VkResult res = record_frame(dev, sc, slot->cmd, i, generate, j);
+    VkResult res = record_frame(dev, sc, slot->cmd, sc->slot_index, i, generate, j);
     if (res == VK_SUCCESS) {
         VkSemaphore waits[AFMF_MAX_APP_WAITS + 1];
         VkPipelineStageFlags stages[AFMF_MAX_APP_WAITS + 1];
@@ -559,6 +587,12 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     slot->pending = true;
     sc->slot_index = (sc->slot_index + 1) % sc->image_count;
     sc->have_history = true;
+
+    /* Debug dumps block on the submission; only while AFMF_DUMP_DIR asks for frames. */
+    if (sc->fg != NULL && afmf_framegen_dump_pending(sc->fg)) {
+        (void)f->wait_for_fences(dev->handle, 1, &slot->fence, VK_TRUE, UINT64_MAX);
+        afmf_framegen_dump_write(dev, sc->fg);
+    }
 
     if (generate) {
         VkPresentInfoKHR companion = {

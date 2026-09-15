@@ -6,17 +6,27 @@
  * presents FRAMES frames. No window, no environment tricks: built with -DAFMF_SANITIZE=ON it is an
  * ordinary instrumented executable. Exit codes: 0 pass, 1 fail, 77 skipped (no headless surface). */
 
+#include <errno.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <vulkan/vulkan.h>
 
 #define LAYER_NAME "VK_LAYER_AFMF"
 #define VALIDATION_LAYER_NAME "VK_LAYER_KHRONOS_validation"
 #define FRAMES 120u
 #define EXIT_SKIP 77
+
+/* Synthetic content: a white square sliding right on black, SQUARE_STEP pixels per frame, so an
+ * interpolated frame must show it halfway between two real ones. */
+#define SQUARE_SIZE 64u
+#define SQUARE_X0 64u
+#define SQUARE_Y 200u
+#define SQUARE_STEP 8u
+#define SQUARE_WRAP 448u
 
 #define CHECK(expr)                                                                         \
     do {                                                                                    \
@@ -41,6 +51,10 @@ struct ctx {
     VkCommandBuffer command_buffer;
     VkSemaphore acquired;
     VkSemaphore ready;
+    VkExtent2D extent;
+    VkBuffer staging;
+    VkDeviceMemory staging_memory;
+    uint8_t *staging_mapped;
     uint32_t validation_errors;
 };
 
@@ -229,7 +243,7 @@ static bool create_device_and_swapchain(struct ctx *ctx)
         .imageColorSpace = format.colorSpace,
         .imageExtent = extent,
         .imageArrayLayers = 1,
-        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .preTransform = caps.currentTransform,
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
@@ -255,13 +269,63 @@ static bool create_device_and_swapchain(struct ctx *ctx)
     VkSemaphoreCreateInfo semaphore = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     CHECK(vkCreateSemaphore(ctx->device, &semaphore, NULL, &ctx->acquired));
     CHECK(vkCreateSemaphore(ctx->device, &semaphore, NULL, &ctx->ready));
+
+    /* Host-visible staging for the synthetic frames (RGBA8 or BGRA8: 4 bytes per pixel). */
+    ctx->extent = extent;
+    VkDeviceSize size = (VkDeviceSize)extent.width * extent.height * 4u;
+    VkBufferCreateInfo buffer = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    CHECK(vkCreateBuffer(ctx->device, &buffer, NULL, &ctx->staging));
+    VkMemoryRequirements reqs;
+    vkGetBufferMemoryRequirements(ctx->device, ctx->staging, &reqs);
+    VkPhysicalDeviceMemoryProperties memory;
+    vkGetPhysicalDeviceMemoryProperties(ctx->physical_device, &memory);
+    const VkMemoryPropertyFlags wanted =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    uint32_t type = UINT32_MAX;
+    for (uint32_t i = 0; i < memory.memoryTypeCount && type == UINT32_MAX; i++)
+        if ((reqs.memoryTypeBits & (1u << i)) && (memory.memoryTypes[i].propertyFlags & wanted) == wanted)
+            type = i;
+    if (type == UINT32_MAX)
+        return false;
+    VkMemoryAllocateInfo alloc_memory = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = reqs.size,
+        .memoryTypeIndex = type,
+    };
+    CHECK(vkAllocateMemory(ctx->device, &alloc_memory, NULL, &ctx->staging_memory));
+    CHECK(vkBindBufferMemory(ctx->device, ctx->staging, ctx->staging_memory, 0));
+    void *mapped = NULL;
+    CHECK(vkMapMemory(ctx->device, ctx->staging_memory, 0, size, 0, &mapped));
+    ctx->staging_mapped = mapped;
     return true;
 }
 
-/* Acquire, transition the image to PRESENT_SRC, present, then drain the queue so the same two
- * semaphores can be reused next frame without any tracking. Correctness, not throughput. */
-static bool present_frame(struct ctx *ctx)
+static uint32_t square_x(uint32_t frame)
 {
+    return SQUARE_X0 + (frame * SQUARE_STEP) % SQUARE_WRAP;
+}
+
+static void paint_frame(struct ctx *ctx, uint32_t frame)
+{
+    uint32_t w = ctx->extent.width, h = ctx->extent.height;
+    memset(ctx->staging_mapped, 0, (size_t)w * h * 4u);
+    uint32_t x0 = square_x(frame);
+    for (uint32_t y = SQUARE_Y; y < SQUARE_Y + SQUARE_SIZE && y < h; y++)
+        for (uint32_t x = x0; x < x0 + SQUARE_SIZE && x < w; x++)
+            memset(ctx->staging_mapped + ((size_t)y * w + x) * 4u, 0xff, 4);
+}
+
+/* Acquire, upload the synthetic frame, transition the image to PRESENT_SRC, present, then drain
+ * the queue so the same two semaphores can be reused next frame without any tracking.
+ * Correctness, not throughput. */
+static bool present_frame(struct ctx *ctx, uint32_t frame)
+{
+    paint_frame(ctx, frame);
     uint32_t index = 0;
     CHECK(vkAcquireNextImageKHR(ctx->device, ctx->swapchain, UINT64_MAX, ctx->acquired,
                                 VK_NULL_HANDLE, &index));
@@ -282,17 +346,31 @@ static bool present_frame(struct ctx *ctx)
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     };
     CHECK(vkBeginCommandBuffer(ctx->command_buffer, &begin));
-    VkImageMemoryBarrier barrier = {
+    VkImageMemoryBarrier to_transfer = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
         .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .image = image,
         .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
     };
     vkCmdPipelineBarrier(ctx->command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &to_transfer);
+    VkBufferImageCopy region = {
+        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+        .imageExtent = {ctx->extent.width, ctx->extent.height, 1},
+    };
+    vkCmdCopyBufferToImage(ctx->command_buffer, ctx->staging, image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    VkImageMemoryBarrier to_present = to_transfer;
+    to_present.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to_present.dstAccessMask = 0;
+    to_present.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to_present.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    vkCmdPipelineBarrier(ctx->command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &to_present);
     CHECK(vkEndCommandBuffer(ctx->command_buffer));
 
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -329,6 +407,12 @@ static void destroy(struct ctx *ctx)
 {
     if (ctx->device != VK_NULL_HANDLE) {
         (void)vkDeviceWaitIdle(ctx->device);
+        if (ctx->staging_mapped != NULL)
+            vkUnmapMemory(ctx->device, ctx->staging_memory);
+        if (ctx->staging != VK_NULL_HANDLE)
+            vkDestroyBuffer(ctx->device, ctx->staging, NULL);
+        if (ctx->staging_memory != VK_NULL_HANDLE)
+            vkFreeMemory(ctx->device, ctx->staging_memory, NULL);
         if (ctx->ready != VK_NULL_HANDLE)
             vkDestroySemaphore(ctx->device, ctx->ready, NULL);
         if (ctx->acquired != VK_NULL_HANDLE)
@@ -363,9 +447,60 @@ static bool run(struct ctx *ctx)
         !create_device_and_swapchain(ctx))
         return false;
     for (uint32_t i = 0; i < FRAMES; i++)
-        if (!present_frame(ctx))
+        if (!present_frame(ctx, i))
             return false;
     return true;
+}
+
+/* Reads the layer's dump of generated frame `n` (between real frames n-1 and n) and checks that
+ * the square's centroid sits halfway between where those two frames drew it. */
+static bool check_dump(const char *dir, uint32_t n)
+{
+    char path[512];
+    if (snprintf(path, sizeof path, "%s/afmf_generated_%u.ppm", dir, n) >= (int)sizeof path)
+        return false;
+    FILE *in = fopen(path, "rb");
+    if (in == NULL) {
+        (void)fprintf(stderr, "no dump at %s: %s\n", path, strerror(errno));
+        return false;
+    }
+    unsigned w = 0, h = 0, maxval = 0;
+    bool ok = fscanf(in, "P6 %u %u %u", &w, &h, &maxval) == 3 && fgetc(in) == '\n' && w > 0 &&
+              h > 0 && w <= 8192 && h <= 8192;
+    double sum_x = 0, sum_y = 0;
+    unsigned long bright = 0;
+    for (unsigned y = 0; ok && y < h; y++) {
+        for (unsigned x = 0; x < w; x++) {
+            int r = fgetc(in), g = fgetc(in), b = fgetc(in);
+            if (r == EOF || g == EOF || b == EOF) {
+                ok = false;
+                break;
+            }
+            if (r > 128 && g > 128 && b > 128) {
+                sum_x += x;
+                sum_y += y;
+                bright++;
+            }
+        }
+    }
+    (void)fclose(in);
+    if (!ok || bright == 0) {
+        (void)fprintf(stderr, "%s: unreadable or no bright pixels\n", path);
+        return false;
+    }
+    double cx = sum_x / (double)bright, cy = sum_y / (double)bright;
+    double expected_x = ((double)square_x(n - 1) + (double)square_x(n)) / 2.0 + SQUARE_SIZE / 2.0;
+    double expected_y = SQUARE_Y + SQUARE_SIZE / 2.0;
+    /* Centroid of pixel indices sits half a pixel left/up of the geometric centre. */
+    expected_x -= 0.5;
+    expected_y -= 0.5;
+    bool placed = cx > expected_x - 2.0 && cx < expected_x + 2.0 && cy > expected_y - 2.0 &&
+                  cy < expected_y + 2.0;
+    bool sized = bright > SQUARE_SIZE * SQUARE_SIZE / 2 && bright < SQUARE_SIZE * SQUARE_SIZE * 2;
+    (void)fprintf(stderr, "%s: %lu bright pixels, centroid (%.1f, %.1f), expected (%.1f, %.1f)%s\n",
+                  path, bright, cx, cy, expected_x, expected_y,
+                  placed && sized ? "" : " MISMATCH");
+    return placed && sized;
 }
 
 int main(void)
@@ -379,9 +514,19 @@ int main(void)
         return EXIT_SKIP;
     }
 
+    const char *dump_dir = getenv("AFMF_DUMP_DIR");
+    if (dump_dir != NULL && mkdir(dump_dir, 0755) != 0 && errno != EEXIST) {
+        (void)fprintf(stderr, "cannot create %s: %s\n", dump_dir, strerror(errno));
+        return EXIT_FAILURE;
+    }
+
     struct ctx ctx = {0};
     bool ok = run(&ctx);
     destroy(&ctx);
+
+    /* Dumps 1 and 2 are the companions of real frames 1 and 2: the square must be halfway. */
+    if (ok && dump_dir != NULL)
+        ok = check_dump(dump_dir, 1) && check_dump(dump_dir, 2);
 
     if (ctx.validation_errors > 0) {
         (void)fprintf(stderr, "%" PRIu32 " validation error(s)\n", ctx.validation_errors);

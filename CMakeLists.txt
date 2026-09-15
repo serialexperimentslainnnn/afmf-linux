@@ -30,15 +30,85 @@ set(AFMF_WARNINGS
 )
 set(AFMF_SANITIZE_FLAGS -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
 
+# ---- shaders: GLSL -> SPIR-V -> one embedded header --------------------------------------------
+
+find_program(AFMF_GLSLANG NAMES glslangValidator glslang)
+if(NOT AFMF_GLSLANG)
+    message(FATAL_ERROR "glslang not found; it compiles the layer's shaders (Fedora: dnf install glslang)")
+endif()
+
+# Optional: every compiled module is also checked with spirv-val when SPIRV-Tools is installed.
+find_program(AFMF_SPIRV_VAL spirv-val)
+if(AFMF_SPIRV_VAL)
+    set(AFMF_VALIDATE "${AFMF_SPIRV_VAL}" --target-env vulkan1.1)
+else()
+    set(AFMF_VALIDATE "${CMAKE_COMMAND}" -E echo "spirv-val not installed, skipping")
+endif()
+set(AFMF_SPV_DIR "${CMAKE_BINARY_DIR}/shaders")
+set(AFMF_FFX_DIR "${CMAKE_SOURCE_DIR}/shaders/fidelityfx")
+file(GLOB_RECURSE AFMF_FFX_HEADERS "${AFMF_FFX_DIR}/*.h")
+set(AFMF_SPV_FILES)
+
+# afmf_glsl(<output name> <source> [defines...]): compiles one compute shader to ${AFMF_SPV_DIR}/<name>.spv
+function(afmf_glsl name source)
+    set(spv "${AFMF_SPV_DIR}/${name}.spv")
+    add_custom_command(
+        OUTPUT "${spv}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${AFMF_SPV_DIR}"
+        # Vulkan 1.1 / SPIR-V 1.3: the lowest version with subgroup ops, so the layer works
+        # inside any application that asked for 1.1 or newer (see api_version in framegen.c).
+        COMMAND "${AFMF_GLSLANG}" -V --target-env vulkan1.1 -S comp ${ARGN}
+                "-I${AFMF_FFX_DIR}" -o "${spv}" "${source}"
+        COMMAND ${AFMF_VALIDATE} "${spv}"
+        DEPENDS "${source}" ${AFMF_FFX_HEADERS}
+        COMMENT "glslang ${name}"
+        VERBATIM
+    )
+    set(AFMF_SPV_FILES ${AFMF_SPV_FILES} "${spv}" PARENT_SCOPE)
+endfunction()
+
+# FidelityFX Optical Flow passes, SDR permutation, exactly as the SDK's Vulkan backend built them.
+set(AFMF_FFX_DEFINES -DFFX_GPU=1 -DFFX_GLSL=1 -DFFX_OPTICALFLOW_OPTION_HDR_COLOR_INPUT=0)
+foreach(pass
+        ffx_opticalflow_prepare_luma_pass
+        ffx_opticalflow_compute_luminance_pyramid_pass
+        ffx_opticalflow_generate_scd_histogram_pass
+        ffx_opticalflow_compute_scd_divergence_pass
+        ffx_opticalflow_compute_optical_flow_advanced_pass_v5
+        ffx_opticalflow_filter_optical_flow_pass_v5
+        ffx_opticalflow_scale_optical_flow_advanced_pass_v5)
+    afmf_glsl(${pass} "${AFMF_FFX_DIR}/passes/${pass}.glsl" ${AFMF_FFX_DEFINES})
+endforeach()
+
+# The interpolator, once per output format it can write (see describe_format in src/framegen.c).
+set(AFMF_INTERP "${CMAKE_SOURCE_DIR}/shaders/afmf_interpolate.comp")
+afmf_glsl(afmf_interpolate_rgba8 "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgba8 -DAFMF_SWAP_RB=0)
+afmf_glsl(afmf_interpolate_rgba8_bgra "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgba8 -DAFMF_SWAP_RB=1)
+afmf_glsl(afmf_interpolate_rgb10a2 "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgb10_a2 -DAFMF_SWAP_RB=0)
+afmf_glsl(afmf_interpolate_rgba16f "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgba16f -DAFMF_SWAP_RB=0)
+
+set(AFMF_SPIRV_HEADER "${AFMF_SPV_DIR}/afmf_spirv.h")
+list(JOIN AFMF_SPV_FILES "|" AFMF_SPV_JOINED)
+add_custom_command(
+    OUTPUT "${AFMF_SPIRV_HEADER}"
+    COMMAND "${CMAKE_COMMAND}" "-DOUTPUT=${AFMF_SPIRV_HEADER}" "-DINPUTS=${AFMF_SPV_JOINED}"
+            -P "${CMAKE_SOURCE_DIR}/cmake/embed_spirv.cmake"
+    DEPENDS ${AFMF_SPV_FILES} "${CMAKE_SOURCE_DIR}/cmake/embed_spirv.cmake"
+    COMMENT "Embedding SPIR-V"
+    VERBATIM
+)
+
 # ---- the layer: libafmf-linux.so + afmf-linux.json ----------------------------------------------
 
 add_library(afmf-linux SHARED
     src/config.c
+    src/framegen.c
     src/layer.c
     src/log.c
     src/swapchain.c
+    "${AFMF_SPIRV_HEADER}"
 )
-target_include_directories(afmf-linux PRIVATE src)
+target_include_directories(afmf-linux PRIVATE src "${AFMF_SPV_DIR}")
 target_link_libraries(afmf-linux PRIVATE Vulkan::Headers Threads::Threads)
 target_compile_definitions(afmf-linux PRIVATE _POSIX_C_SOURCE=200809L)
 target_compile_options(afmf-linux PRIVATE ${AFMF_WARNINGS})
@@ -64,13 +134,16 @@ enable_testing()
 
 add_executable(afmf_headless tests/headless.c)
 target_link_libraries(afmf_headless PRIVATE Vulkan::Vulkan)
+target_compile_definitions(afmf_headless PRIVATE _POSIX_C_SOURCE=200809L)
 target_compile_options(afmf_headless PRIVATE ${AFMF_WARNINGS})
 
-# 120 presents: the first has no history, every other one must have got a generated companion.
+# 120 presents: the first has no history, every other one must have got a generated companion,
+# and the dumped companions must show the synthetic square halfway between the real frames.
 add_test(NAME headless COMMAND afmf_headless)
 set_tests_properties(headless PROPERTIES
-    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3"
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_DUMP_DIR=${CMAKE_BINARY_DIR}/Testing/afmf"
     PASS_REGULAR_EXPRESSION "120 presents: 119 generated"
+    FAIL_REGULAR_EXPRESSION "validation error|^failed"
     SKIP_RETURN_CODE 77
 )
 

@@ -1,0 +1,86 @@
+// afmf-linux: frame interpolation from colour + FidelityFX optical flow.
+//
+// For every output pixel y the block motion v (prev = cur + v, in pixels) says where the content
+// at y sits in each real frame at the midpoint: cur(y - v/2) and prev(y + v/2). Both are fetched
+// with bilinear filtering and averaged. When the scene change detector fired, or the motion is
+// beyond what the flow can track, the pixel falls back to the configured fast-motion response:
+// repeat the previous frame or blend the two without motion.
+//
+// Compiled once per output format: AFMF_OUT_FORMAT in {rgba8, rgb10_a2, rgba16f}; AFMF_SWAP_RB=1
+// writes .bgra so a raw copy into a B8G8R8A8 swapchain image lands in the right channels.
+
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+#ifndef AFMF_OUT_FORMAT
+#define AFMF_OUT_FORMAT rgba8
+#endif
+#ifndef AFMF_SWAP_RB
+#define AFMF_SWAP_RB 0
+#endif
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_prev;
+layout(set = 0, binding = 1) uniform sampler2D u_cur;
+layout(set = 0, binding = 2) uniform itexture2D u_flow;      // rg16i, one texel per 8x8 block
+layout(set = 0, binding = 3, r32ui) uniform uimage2D u_scd;  // FidelityFX SCD output, 3 slots
+layout(set = 0, binding = 4, AFMF_OUT_FORMAT) uniform image2D u_out;
+
+layout(push_constant) uniform Params {
+    ivec2 size;          // output size in pixels
+    int block;           // optical flow block size (8)
+    int fallback;        // 0 repeat previous frame, 1 blend without motion
+    float max_motion;    // |v| above which the flow is not trusted, in pixels
+} p;
+
+const int SCD_SCENE_CHANGE_SLOT = 0;
+const int SCD_HISTORY_BITS_SLOT = 1;
+
+// Flow at pixel y, bilinearly interpolated between the four nearest block centres so the field
+// has no 8-pixel steps.
+vec2 flow_at(vec2 y)
+{
+    vec2 b = y / float(p.block) - 0.5;
+    ivec2 b0 = ivec2(floor(b));
+    vec2 f = b - vec2(b0);
+    ivec2 last = textureSize(u_flow, 0) - 1;
+    ivec2 b1 = min(b0 + 1, last);
+    b0 = max(b0, ivec2(0));
+    vec2 v00 = vec2(texelFetch(u_flow, ivec2(b0.x, b0.y), 0).xy);
+    vec2 v10 = vec2(texelFetch(u_flow, ivec2(b1.x, b0.y), 0).xy);
+    vec2 v01 = vec2(texelFetch(u_flow, ivec2(b0.x, b1.y), 0).xy);
+    vec2 v11 = vec2(texelFetch(u_flow, ivec2(b1.x, b1.y), 0).xy);
+    return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+}
+
+void main()
+{
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= p.size.x || pix.y >= p.size.y)
+        return;
+
+    vec2 inv_size = 1.0 / vec2(p.size);
+    vec2 y = vec2(pix) + 0.5;
+
+    bool scene_changed = (imageLoad(u_scd, ivec2(SCD_HISTORY_BITS_SLOT, 0)).x & 1u) != 0u;
+    vec2 v = flow_at(y);
+    bool trusted = !scene_changed && dot(v, v) <= p.max_motion * p.max_motion;
+
+    vec4 colour;
+    if (trusted) {
+        vec2 half_v = 0.5 * v;
+        vec4 from_cur = texture(u_cur, (y - half_v) * inv_size);
+        vec4 from_prev = texture(u_prev, (y + half_v) * inv_size);
+        colour = 0.5 * (from_cur + from_prev);
+    } else if (p.fallback == 1) {
+        colour = 0.5 * (texture(u_cur, y * inv_size) + texture(u_prev, y * inv_size));
+    } else {
+        colour = texture(u_prev, y * inv_size);
+    }
+
+#if AFMF_SWAP_RB
+    colour = colour.bgra;
+#endif
+    imageStore(u_out, pix, colour);
+}

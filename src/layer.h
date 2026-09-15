@@ -34,6 +34,35 @@ struct afmf_device_fns {
     PFN_vkCmdCopyImage cmd_copy_image;
     PFN_vkQueueSubmit queue_submit;
 
+    PFN_vkCreateShaderModule create_shader_module;
+    PFN_vkDestroyShaderModule destroy_shader_module;
+    PFN_vkCreateDescriptorSetLayout create_descriptor_set_layout;
+    PFN_vkDestroyDescriptorSetLayout destroy_descriptor_set_layout;
+    PFN_vkCreatePipelineLayout create_pipeline_layout;
+    PFN_vkDestroyPipelineLayout destroy_pipeline_layout;
+    PFN_vkCreateComputePipelines create_compute_pipelines;
+    PFN_vkDestroyPipeline destroy_pipeline;
+    PFN_vkCreateDescriptorPool create_descriptor_pool;
+    PFN_vkDestroyDescriptorPool destroy_descriptor_pool;
+    PFN_vkAllocateDescriptorSets allocate_descriptor_sets;
+    PFN_vkUpdateDescriptorSets update_descriptor_sets;
+    PFN_vkCreateImageView create_image_view;
+    PFN_vkDestroyImageView destroy_image_view;
+    PFN_vkCreateSampler create_sampler;
+    PFN_vkDestroySampler destroy_sampler;
+    PFN_vkCreateBuffer create_buffer;
+    PFN_vkDestroyBuffer destroy_buffer;
+    PFN_vkGetBufferMemoryRequirements get_buffer_memory_requirements;
+    PFN_vkBindBufferMemory bind_buffer_memory;
+    PFN_vkMapMemory map_memory;
+    PFN_vkUnmapMemory unmap_memory;
+    PFN_vkCmdBindPipeline cmd_bind_pipeline;
+    PFN_vkCmdBindDescriptorSets cmd_bind_descriptor_sets;
+    PFN_vkCmdDispatch cmd_dispatch;
+    PFN_vkCmdPushConstants cmd_push_constants;
+    PFN_vkCmdClearColorImage cmd_clear_color_image;
+    PFN_vkCmdCopyImageToBuffer cmd_copy_image_to_buffer;
+
     PFN_vkCreateSwapchainKHR create_swapchain;
     PFN_vkDestroySwapchainKHR destroy_swapchain;
     PFN_vkGetSwapchainImagesKHR get_swapchain_images;
@@ -44,7 +73,10 @@ struct afmf_device_fns {
 /* Instance-level entry points resolved once per device for its physical device. */
 struct afmf_instance_fns {
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR get_surface_capabilities;
+    PFN_vkGetPhysicalDeviceFormatProperties get_format_properties;
 };
+
+struct afmf_framegen_pipelines;
 
 struct afmf_queue {
     VkQueue handle;
@@ -57,6 +89,7 @@ struct afmf_device {
     void *key;
     VkDevice handle;
     VkPhysicalDevice physical_device;
+    uint32_t api_version; /* what the application asked for, capped by the device */
     PFN_vkGetDeviceProcAddr gdpa;
     /* Dispatchable objects the layer creates below the loader's trampolines (command buffers) must
      * be handed to this so the loader stamps its dispatch pointer on them. */
@@ -65,8 +98,10 @@ struct afmf_device {
     struct afmf_instance_fns ifns;
 
     VkPhysicalDeviceMemoryProperties memory_properties;
+    VkPhysicalDeviceLimits limits;
     VkQueueFamilyProperties *queue_families;
     uint32_t queue_family_count;
+    struct afmf_framegen_pipelines *framegen_pipelines; /* created on first use, freed with the device */
 
     pthread_mutex_t lock; /* guards `queues`, `swapchains` and the per-swapchain counters */
     struct afmf_queue *queues; /* every queue handed out, sized from VkDeviceCreateInfo */

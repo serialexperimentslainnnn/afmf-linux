@@ -11,6 +11,7 @@
 #include "layer.h"
 
 #include "config.h"
+#include "framegen.h"
 #include "log.h"
 #include "swapchain.h"
 
@@ -28,10 +29,12 @@ _Static_assert(sizeof(void *) == 8, "64-bit builds only");
 struct afmf_instance {
     void *key;
     VkInstance handle;
+    uint32_t api_version; /* VkApplicationInfo::apiVersion, 1.0 when absent */
     PFN_vkGetInstanceProcAddr gipa;
     PFN_vkDestroyInstance destroy_instance;
     PFN_vkGetPhysicalDeviceMemoryProperties get_memory_properties;
     PFN_vkGetPhysicalDeviceQueueFamilyProperties get_queue_family_properties;
+    PFN_vkGetPhysicalDeviceProperties get_properties;
     struct afmf_instance *next;
 };
 
@@ -205,7 +208,10 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateInstance(const VkInstanceCreate
     PFN_vkGetPhysicalDeviceQueueFamilyProperties get_families =
         (PFN_vkGetPhysicalDeviceQueueFamilyProperties)next_gipa(
             *out, "vkGetPhysicalDeviceQueueFamilyProperties");
-    if (inst == NULL || next_destroy == NULL || get_memory == NULL || get_families == NULL) {
+    PFN_vkGetPhysicalDeviceProperties get_properties =
+        (PFN_vkGetPhysicalDeviceProperties)next_gipa(*out, "vkGetPhysicalDeviceProperties");
+    if (inst == NULL || next_destroy == NULL || get_memory == NULL || get_families == NULL ||
+        get_properties == NULL) {
         if (next_destroy != NULL)
             next_destroy(*out, alloc);
         free(inst);
@@ -215,10 +221,14 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateInstance(const VkInstanceCreate
 
     inst->key = dispatch_key(*out);
     inst->handle = *out;
+    inst->api_version = info->pApplicationInfo != NULL && info->pApplicationInfo->apiVersion != 0
+                            ? info->pApplicationInfo->apiVersion
+                            : VK_API_VERSION_1_0;
     inst->gipa = next_gipa;
     inst->destroy_instance = next_destroy;
     inst->get_memory_properties = get_memory;
     inst->get_queue_family_properties = get_families;
+    inst->get_properties = get_properties;
 
     pthread_mutex_lock(&g_lock);
     inst->next = g_instances;
@@ -276,6 +286,34 @@ static bool load_device_fns(struct afmf_device *dev, PFN_vkGetDeviceProcAddr nex
     LOAD_DEVICE_FN(cmd_pipeline_barrier, vkCmdPipelineBarrier);
     LOAD_DEVICE_FN(cmd_copy_image, vkCmdCopyImage);
     LOAD_DEVICE_FN(queue_submit, vkQueueSubmit);
+    LOAD_DEVICE_FN(create_shader_module, vkCreateShaderModule);
+    LOAD_DEVICE_FN(destroy_shader_module, vkDestroyShaderModule);
+    LOAD_DEVICE_FN(create_descriptor_set_layout, vkCreateDescriptorSetLayout);
+    LOAD_DEVICE_FN(destroy_descriptor_set_layout, vkDestroyDescriptorSetLayout);
+    LOAD_DEVICE_FN(create_pipeline_layout, vkCreatePipelineLayout);
+    LOAD_DEVICE_FN(destroy_pipeline_layout, vkDestroyPipelineLayout);
+    LOAD_DEVICE_FN(create_compute_pipelines, vkCreateComputePipelines);
+    LOAD_DEVICE_FN(destroy_pipeline, vkDestroyPipeline);
+    LOAD_DEVICE_FN(create_descriptor_pool, vkCreateDescriptorPool);
+    LOAD_DEVICE_FN(destroy_descriptor_pool, vkDestroyDescriptorPool);
+    LOAD_DEVICE_FN(allocate_descriptor_sets, vkAllocateDescriptorSets);
+    LOAD_DEVICE_FN(update_descriptor_sets, vkUpdateDescriptorSets);
+    LOAD_DEVICE_FN(create_image_view, vkCreateImageView);
+    LOAD_DEVICE_FN(destroy_image_view, vkDestroyImageView);
+    LOAD_DEVICE_FN(create_sampler, vkCreateSampler);
+    LOAD_DEVICE_FN(destroy_sampler, vkDestroySampler);
+    LOAD_DEVICE_FN(create_buffer, vkCreateBuffer);
+    LOAD_DEVICE_FN(destroy_buffer, vkDestroyBuffer);
+    LOAD_DEVICE_FN(get_buffer_memory_requirements, vkGetBufferMemoryRequirements);
+    LOAD_DEVICE_FN(bind_buffer_memory, vkBindBufferMemory);
+    LOAD_DEVICE_FN(map_memory, vkMapMemory);
+    LOAD_DEVICE_FN(unmap_memory, vkUnmapMemory);
+    LOAD_DEVICE_FN(cmd_bind_pipeline, vkCmdBindPipeline);
+    LOAD_DEVICE_FN(cmd_bind_descriptor_sets, vkCmdBindDescriptorSets);
+    LOAD_DEVICE_FN(cmd_dispatch, vkCmdDispatch);
+    LOAD_DEVICE_FN(cmd_push_constants, vkCmdPushConstants);
+    LOAD_DEVICE_FN(cmd_clear_color_image, vkCmdClearColorImage);
+    LOAD_DEVICE_FN(cmd_copy_image_to_buffer, vkCmdCopyImageToBuffer);
     /* NULL when VK_KHR_swapchain is not enabled: the hooks are then never handed out (see GDPA). */
     LOAD_DEVICE_FN(create_swapchain, vkCreateSwapchainKHR);
     LOAD_DEVICE_FN(destroy_swapchain, vkDestroySwapchainKHR);
@@ -290,7 +328,17 @@ static bool load_device_fns(struct afmf_device *dev, PFN_vkGetDeviceProcAddr nex
            f->create_fence && f->destroy_fence && f->wait_for_fences && f->reset_fences &&
            f->create_command_pool && f->destroy_command_pool && f->allocate_command_buffers &&
            f->begin_command_buffer && f->end_command_buffer && f->cmd_pipeline_barrier &&
-           f->cmd_copy_image && f->queue_submit;
+           f->cmd_copy_image && f->queue_submit && f->create_shader_module &&
+           f->destroy_shader_module && f->create_descriptor_set_layout &&
+           f->destroy_descriptor_set_layout && f->create_pipeline_layout &&
+           f->destroy_pipeline_layout && f->create_compute_pipelines && f->destroy_pipeline &&
+           f->create_descriptor_pool && f->destroy_descriptor_pool &&
+           f->allocate_descriptor_sets && f->update_descriptor_sets && f->create_image_view &&
+           f->destroy_image_view && f->create_sampler && f->destroy_sampler && f->create_buffer &&
+           f->destroy_buffer && f->get_buffer_memory_requirements && f->bind_buffer_memory &&
+           f->map_memory && f->unmap_memory && f->cmd_bind_pipeline &&
+           f->cmd_bind_descriptor_sets && f->cmd_dispatch && f->cmd_push_constants &&
+           f->cmd_clear_color_image && f->cmd_copy_image_to_buffer;
 }
 
 static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physical_device,
@@ -333,7 +381,14 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
     dev->lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     dev->ifns.get_surface_capabilities = (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)next_gipa(
         inst->handle, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+    dev->ifns.get_format_properties = (PFN_vkGetPhysicalDeviceFormatProperties)next_gipa(
+        inst->handle, "vkGetPhysicalDeviceFormatProperties");
 
+    VkPhysicalDeviceProperties properties;
+    inst->get_properties(physical_device, &properties);
+    dev->limits = properties.limits;
+    dev->api_version = properties.apiVersion < inst->api_version ? properties.apiVersion
+                                                                 : inst->api_version;
     inst->get_memory_properties(physical_device, &dev->memory_properties);
     inst->get_queue_family_properties(physical_device, &dev->queue_family_count, NULL);
     dev->queue_families = calloc(dev->queue_family_count, sizeof *dev->queue_families);
@@ -371,6 +426,7 @@ static VKAPI_ATTR void VKAPI_CALL afmf_DestroyDevice(VkDevice device,
         return;
     }
     afmf_swapchain_forget_all(dev);
+    afmf_framegen_pipelines_destroy(dev);
     dev->fns.destroy_device(device, alloc);
     device_free(dev);
 }

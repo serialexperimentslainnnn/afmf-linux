@@ -146,8 +146,9 @@ AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=blend <game>
 
 ## Limitations
 
-- Colour only: no depth, no motion vectors, no HUD detection. Overlays and fast-moving thin
-  objects show the usual optical-flow artefacts.
+- Colour only: no depth, no motion vectors, no HUD detection. In the games measured so far it
+  looks smooth; where the flow has nothing to go on (overlays over fast motion, very thin objects,
+  scene cuts) the pixel falls back to the previous frame or a blend instead of guessing.
 - The presented frame rate doubles, the input latency gets worse by half a frame (the real frame
   is held back so the generated one lands in between), as with AMD's implementation.
 - Applications on Vulkan 1.0 get no interpolation (the block search needs subgroup operations);
@@ -173,7 +174,8 @@ interpolation and it is not affiliated with AMD.
 through Vulkan, which is where the layer sits. It has been measured with vkd3d-proton titles.
 
 **Does it need an AMD GPU?** No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image
-atomics; the tuning was done on RDNA4 with RADV. RDNA2/RDNA3, Intel and NVIDIA are untested.
+atomics; the tuning was done on RDNA4 with RADV, and RDNA3 is verified (RX 7800 XT). RDNA2, Intel
+and NVIDIA are untested.
 
 **Does it work with the game's own frame generation (FSR 3/4 FG, DLSS FG) or with lsfg-vk?** With
 the game's own, yes, and in Cyberpunk 2077 it needs it on: the layer doubles whatever the game

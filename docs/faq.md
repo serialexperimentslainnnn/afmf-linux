@@ -9,7 +9,7 @@ faq:
   - q: Does it work with Proton and DirectX games?
     a: Yes. DXVK and vkd3d-proton present through Vulkan, which is where the layer sits.
   - q: Does it need an AMD GPU?
-    a: No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image atomics. Tuned on RDNA4 with RADV; other GPUs are untested.
+    a: No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image atomics. Tuned on RDNA4 and verified on RDNA3, both with RADV; RDNA2, Intel and NVIDIA are untested.
   - q: Does it work with the game's own frame generation (FSR 3/4 FG)?
     a: Yes, and keep it on. The layer doubles whatever the game presents; in Cyberpunk 2077 under vkd3d-proton it only produced companions with the game's frame generation enabled. Leave the in-game setting as you would on Windows with AFMF.
   - q: Can I use it together with lsfg-vk or OptiScaler?

@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in a game or in the layer is wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every diagnosis so far has needed the same five things. Please fill them in; a report
+        without the log usually cannot be acted on.
+  - type: input
+    id: version
+    attributes:
+      label: afmf-linux version
+      description: From the release you installed, or `git rev-parse --short HEAD`
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: textarea
+    id: system
+    attributes:
+      label: System
+      description: GPU, Mesa version (`vulkaninfo --summary | grep driverInfo`), kernel, distribution, compositor (KDE/GNOME/Hyprland/gamescope, Wayland or X11)
+      placeholder: |
+        RX 9070 XT, Mesa 26.1.8, Linux 7.2, Fedora 44, KDE Plasma 6.7 Wayland
+    validations:
+      required: true
+  - type: textarea
+    id: game
+    attributes:
+      label: Game and runtime
+      description: Game, Proton build (or native), and the **full** Steam launch options / command line
+      placeholder: |
+        Monster Hunter Wilds, Proton-CachyOS Wineland 11.0, `AFMF_ENABLE=1 AFMF_LOG=2 AFMF_PROFILE=1 %command% 2>afmf.log`
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Layer log
+      description: Run with `AFMF_LOG=2 AFMF_PROFILE=1` and `2>afmf.log` after `%command%`; paste the whole file or attach it
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens, and what you expected
+      description: Frame rate with and without the layer (`DISABLE_AFMF=1`), stutter, artefacts, crash (with the backtrace if you have one)
+    validations:
+      required: true

@@ -25,7 +25,7 @@ clocks; a game runs it faster):
 | Filter and scale | 123 &micro;s |
 | Interpolation | 74 &micro;s |
 | Output copy | 59 &micro;s (0 with `AFMF_DIRECT_OUTPUT=1`) |
-| **Total** | **720-730 &micro;s** |
+| **Total** | **700-760 &micro;s** |
 
 The previous release's default (flow at half resolution, five levels) costs 840-910 &micro;s on
 the same run: the full-resolution search with all seven levels now costs less than the
@@ -54,7 +54,8 @@ two presents and the pacing hold run on the layer's presentation thread.
 | Presentation thread with half-frame pacing | hook 546 &rarr; 80 &micro;s in game; generated frames evenly spaced |
 | Flow and interpolation pre-recorded into secondary command buffers | recording in the hook 170-190 &rarr; 80-117 &micro;s (headless, validation layer on) |
 | Direct output into the swapchain image (`AFMF_DIRECT_OUTPUT=1`, opt-in) | output copy 9-17 &micro;s &rarr; 0 on the GPU; the interpolate dispatch moves to the per-frame primary (+10-20 &micro;s of recording under validation); what storage usage costs the game's own rendering is per game and not measured here |
-| Fused ingest (`AFMF_DIRECT_INGEST`), detector on the level-1 luma, four predictions checked at once | one read of the game's frame instead of a copy plus a luma read; a quarter of the histogram work; fewer barriers per group in the search |
+| Fused ingest (`AFMF_DIRECT_INGEST`), detector alongside the pyramid and the coarsest search, four predictions checked at once | one read of the game's frame instead of a copy plus a luma read; the detector's two passes fill the pyramid's and the coarse levels' idle time instead of adding their own; fewer barriers per group in the search |
+| Measured and rejected: refining a nearly matching prediction over +-4 (64 candidates, one per lane) instead of searching +-8 | the coarse levels' vectors came out a pixel off, the fine levels stopped skipping their search, and the search went from 274 to 706 &micro;s |
 | Packed 16-bit SAD in the search (`AFMF_SAD_INT16`) | the sum of absolute differences on byte pairs, two per instruction, instead of shift-mask-subtract-abs per byte: about a third of the ALU work per candidate |
 | Static blocks skip the search (`AFMF_STATIC_BLOCK_SAD`) | search 307 &rarr; 117 &micro;s at half resolution, 513 &rarr; 156 at full, on the headless test's mostly still picture; a game's share of still blocks decides its gain |
 
@@ -62,7 +63,7 @@ Against the previous release, same binary and method (3440&times;1440, unpaced h
 runs each): on the still picture, host time in the present hook 233-275 &rarr; 102-149 &micro;s
 (the spare's release fence is waited on outside the swapchain lock, recording is pre-recorded),
 GPU per generated frame 584 &rarr; 409-432 &micro;s at half resolution and 1123-1141 &rarr; 367-424 at
-full; on the full-frame pan, 840-910 &micro;s with the old default against 720-730 with the new
+full; on the full-frame pan, 825-840 &micro;s with the old default against 700-760 with the new
 one at four times the blocks and seven levels.
 
 Two things learned from the screenshots' games that are worth more than a number: id Tech 8

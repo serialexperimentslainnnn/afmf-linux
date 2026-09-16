@@ -18,9 +18,11 @@ All notable changes to afmf-linux are documented here. The format follows
   two frames (their SAD at rest, which the SDK already computed for its level-0 fallback, is taken
   first); still parts of the picture cost nothing to search. One marked edit in the vendored
   search shader, listed in `shaders/fidelityfx/NOTICE.md`.
-- The scene change detector histograms the level-1 luma (a quarter of the pixels; it normalises
-  its histograms, so the threshold is the same), and the block search checks a group's four
-  predictions at once before any of them searches.
+- The scene change detector's histogram runs alongside the luma pyramid and its divergence
+  alongside the coarsest search, with no barrier in between (both only read the level-0 luma;
+  the coarsest search reads the detector's output without waiting, which every finer level and
+  the interpolator still do), and the block search checks a group's four predictions at once
+  before any of them searches.
 - `AFMF_SAD_INT16` (on): the block search's sum of absolute differences runs on packed 16-bit
   byte pairs (`v_pk_*` on RDNA) instead of one byte at a time, from a second build of the SDK's
   search pass; the layer enables `shaderInt16` at device creation when the game did not and the

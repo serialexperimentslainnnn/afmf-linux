@@ -20,8 +20,8 @@ Local edits, every line of them marked `afmf-linux:`:
 - `opticalflow/ffx_opticalflow_compute_optical_flow_v5.h`: each block's SAD at the vector
   predicted by the coarser level (zero at the coarsest) is taken before the search, and a block at
   or under the specialization constant `afmfStaticBlockSad` (`AFMF_STATIC_BLOCK_SAD`, 0 = the
-  SDK's behaviour) keeps that vector and skips the search; the SDK's level-0 zero-vector fallback
-  only computes its sum at level 0.
+  SDK's behaviour) keeps that vector and skips the search; the SDK's level-0 zero-vector
+  fallback only computes its sum at level 0.
 - `opticalflow/ffx_opticalflow_common.h`, `..._v5.h` and
   `passes/ffx_opticalflow_compute_optical_flow_advanced_pass_v5.glsl`: with `AFMF_SAD_INT16=1`
   (a second build of the search pass, used on devices with `shaderInt16`) the SAD runs on packed

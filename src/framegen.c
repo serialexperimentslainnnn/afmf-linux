@@ -32,9 +32,8 @@
 enum stage {
     STAGE_INGEST,
     STAGE_PREPARE,
-    STAGE_PYRAMID,
-    STAGE_SCD,
-    STAGE_SEARCH,
+    STAGE_PYRAMID, /* the luma pyramid and the scene change detector's histogram, side by side */
+    STAGE_SEARCH,  /* includes the detector's divergence pass, which overlaps the coarsest search */
     STAGE_FILTER,
     STAGE_SCALE,
     STAGE_INTERPOLATE,
@@ -43,7 +42,7 @@ enum stage {
 };
 
 static const char *const stage_names[STAGE_COUNT] = {
-    "ingest copy", "prepare luma", "luma pyramid", "scene change detector", "search (all levels)",
+    "ingest", "prepare luma", "pyramid + scd histogram", "search (all levels)",
     "filter (all levels)", "scale (all levels)", "interpolate", "output copy",
 };
 #define AFMF_LEVELS 7u
@@ -53,7 +52,7 @@ static const char *const stage_names[STAGE_COUNT] = {
 #define AFMF_SCD_SLOTS 3u
 #define AFMF_CB_SIZE 32u
 #define AFMF_CB_PER_SLOT (AFMF_LEVELS + 2u) /* one per pyramid level, one for the downsampler, one for the detector */
-#define AFMF_CB_SCD (AFMF_LEVELS + 1u)      /* the scene change detector's: level-1 luma size */
+#define AFMF_CB_SCD (AFMF_LEVELS + 1u)      /* the scene change detector's: level-0 luma, level 0 */
 #define AFMF_MIN_EXTENT 128u
 #define AFMF_MAX_TRUSTED_MOTION 64.0f /* pixels between frames; beyond it the flow is guesswork */
 
@@ -1182,7 +1181,7 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
         writer_end(&w);
 
         writer_begin(&w, dev, fg->sets[p][SET_SCD_HISTOGRAM]);
-        writer_image(&w, 0, SAMPLED, fg->luma[p][1].view, VK_NULL_HANDLE); /* see AFMF_CB_SCD */
+        writer_image(&w, 0, SAMPLED, fg->luma[p][0].view, VK_NULL_HANDLE); /* see record_flow */
         writer_image(&w, 1, STORAGE, fg->scd_histogram.view, VK_NULL_HANDLE);
         writer_ubo(&w, 2, fg->cb);
         writer_end(&w);
@@ -1560,11 +1559,11 @@ static void write_constants(struct afmf_framegen *fg, uint32_t slot, uint32_t le
         };
         memcpy(fg->cb_mapped + cb_offset(fg, slot, k), &of, sizeof of);
     }
-    /* The scene change detector histograms the level-1 luma (a quarter of the pixels; it
-     * normalises the histograms, so the threshold does not move): its DisplaySize() is that. */
+    /* The scene change detector histograms the level-0 luma, as the SDK does, so it runs
+     * alongside the pyramid instead of after it (record_flow). */
     struct cb_of scd = {
-        .input_luma_resolution = {(int32_t)fg->luma_size[1].width, (int32_t)fg->luma_size[1].height},
-        .pyramid_level = 1,
+        .input_luma_resolution = {(int32_t)fg->luma_size[0].width, (int32_t)fg->luma_size[0].height},
+        .pyramid_level = 0,
         .pyramid_level_count = level_count,
         .frame_index = fg->frame_index,
         .backbuffer_transfer_function = fg->transfer_function,
@@ -1667,22 +1666,26 @@ static void record_flow(struct afmf_device *dev, struct afmf_framegen *fg, VkCom
     profiler_mark(dev, fg, cmd, slot, STAGE_PREPARE);
 
     /* The pyramid (reads luma 0, writes levels 1-6) and the detector's histogram (reads luma 0)
-     * would be independent, but the detector reads level 1 (a quarter of the pixels for the
-     * same normalised histograms), so it waits for the pyramid. */
+     * are independent: no barrier between them, so they share the GPU. */
     uint32_t pyramid_offsets[2] = {of0, cb_offset(fg, slot, AFMF_LEVELS)};
-    dispatch(dev, cmd, pl->pipelines[PASS_PYRAMID], pl->layouts[PASS_PYRAMID],
-             fg->sets[p][SET_PYRAMID], pyramid_offsets, 2, (w - 1) / 64 + 1, (h - 1) / 64 + 1, 1);
-    profiler_mark(dev, fg, cmd, slot, STAGE_PYRAMID);
-
+    dispatch_pass(dev, cmd, pl->pipelines[PASS_PYRAMID], pl->layouts[PASS_PYRAMID],
+                  fg->sets[p][SET_PYRAMID], pyramid_offsets, 2, (w - 1) / 64 + 1, (h - 1) / 64 + 1,
+                  1, false);
     uint32_t ofscd = cb_offset(fg, slot, AFMF_CB_SCD);
-    uint32_t strata_width = (fg->luma_size[1].width / 4) / AFMF_HISTOGRAMS_PER_DIM;
+    uint32_t strata_width = (fg->luma_size[0].width / 4) / AFMF_HISTOGRAMS_PER_DIM;
     dispatch(dev, cmd, pl->pipelines[PASS_SCD_HISTOGRAM], pl->layouts[PASS_SCD_HISTOGRAM],
              fg->sets[p][SET_SCD_HISTOGRAM], &ofscd, 1, (strata_width + 31) / 32, 16,
              AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM);
-    dispatch(dev, cmd, pl->pipelines[PASS_SCD_DIVERGENCE], pl->layouts[PASS_SCD_DIVERGENCE],
-             fg->sets[p][SET_SCD_DIVERGENCE], &of0, 1,
-             AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM, AFMF_HISTOGRAM_SHIFTS, 1);
-    profiler_mark(dev, fg, cmd, slot, STAGE_SCD);
+    profiler_mark(dev, fg, cmd, slot, STAGE_PYRAMID);
+
+    /* The detector's divergence (nine groups) runs alongside the coarsest search instead of in
+     * front of it: that search reads the detector's output without waiting for it, so on a cut
+     * frame its vectors are whatever they are, and every level after it, which does wait, and
+     * the interpolator store zeros as before. Off a cut both values say the same. */
+    dispatch_pass(dev, cmd, pl->pipelines[PASS_SCD_DIVERGENCE], pl->layouts[PASS_SCD_DIVERGENCE],
+                  fg->sets[p][SET_SCD_DIVERGENCE], &of0, 1,
+                  AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM, AFMF_HISTOGRAM_SHIFTS, 1,
+                  !companion);
 
     for (uint32_t k = companion ? levels : 0; k-- > 0;) {
         uint32_t ofk = cb_offset(fg, slot, k);

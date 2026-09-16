@@ -54,6 +54,7 @@ struct afmf_present_job {
     bool have_present_mode;
     VkPresentModeKHR present_mode;
     VkFence present_fence; /* VK_EXT_swapchain_maintenance1: signalled with the real frame */
+    bool real_unwaited;    /* the layer's submission failed twice: present the real frame without its semaphore */
 #ifdef VK_EXT_present_timing
     /* Newer headers only (distribution packages build against older ones): without the
      * extension in the header, a timing request makes that present inline, like any unknown
@@ -61,6 +62,13 @@ struct afmf_present_job {
     bool have_timing;      /* VK_EXT_present_timing: the application's timing request, real frame */
     VkPresentTimingInfoEXT timing;
 #endif
+};
+
+/* One frame handed by the hook to the work thread: the slot it took, and the present job the
+ * thread completes (companion, pacing) and hands on to the presentation thread. */
+struct afmf_frame_job {
+    uint32_t slot;
+    struct afmf_present_job present;
 };
 
 /* One in-flight layer submission: its command buffer and the fence that says the slot can be
@@ -93,6 +101,11 @@ struct afmf_swapchain {
     VkImage *images;
     VkSemaphore *sem_generated; /* per image: signals "the generated frame in image k is ready" */
     VkSemaphore *sem_real;      /* per image: signals "the layer is done reading image k" */
+    /* Per slot: the application's wait semaphores, consumed by the hook's empty submission
+     * before the present call returns (a binary semaphore must be waited before it is signalled
+     * again, and the application signals its own on its next frame), and turned into this one,
+     * which the work thread's submission waits on. */
+    VkSemaphore *sem_app;
     struct afmf_slot *slots;    /* one per image, used round-robin */
     uint32_t slot_index;
     VkCommandPool pool;
@@ -145,6 +158,23 @@ struct afmf_swapchain {
     struct afmf_present_job jobs[AFMF_MAX_JOBS];
     uint32_t job_head, job_count;
     VkResult deferred_result; /* worst result of presents done so far, returned by the next present call */
+    uint32_t in_flight;       /* frames between the hook and the end of their presents; at most image_count */
+
+    /* Work thread: the slot's fence, the governor, the spare, recording and the submission run
+     * here, so the hook only consumes the application's semaphores and queues. Its state is
+     * under work_lock; what it shares with the hook and the presentation thread (counters,
+     * the governor, the cadence) is under job_lock. It never takes dev->lock: vkDeviceWaitIdle
+     * drains it while holding that. */
+    pthread_t worker;
+    bool worker_running;
+    bool worker_stop;
+    bool worker_busy;         /* between taking a frame off the queue and handing its presents on */
+    bool worker_failed;       /* a submission failed: the hook disables generation on its next call */
+    pthread_mutex_t work_lock;
+    pthread_cond_t work_cond;       /* new frame, or stop */
+    pthread_cond_t work_drain_cond; /* a frame finished */
+    struct afmf_frame_job work[AFMF_MAX_JOBS];
+    uint32_t work_head, work_count;
     /* vkAcquireNextImageKHR and vkQueuePresentKHR both need external synchronisation on the
      * swapchain: the application's acquires, the layer's spare acquires and the presentation
      * thread's presents all take this. */
@@ -258,8 +288,10 @@ static VkResult gen_init(struct afmf_device *dev, struct afmf_swapchain *sc)
     sc->images = calloc(sc->image_count, sizeof *sc->images);
     sc->sem_generated = calloc(sc->image_count, sizeof *sc->sem_generated);
     sc->sem_real = calloc(sc->image_count, sizeof *sc->sem_real);
+    sc->sem_app = calloc(sc->image_count, sizeof *sc->sem_app);
     sc->slots = calloc(sc->image_count, sizeof *sc->slots);
-    if (sc->images == NULL || sc->sem_generated == NULL || sc->sem_real == NULL || sc->slots == NULL)
+    if (sc->images == NULL || sc->sem_generated == NULL || sc->sem_real == NULL ||
+        sc->sem_app == NULL || sc->slots == NULL)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     res = dev->fns.get_swapchain_images(dev->handle, sc->handle, &sc->image_count, sc->images);
     if (res != VK_SUCCESS)
@@ -271,6 +303,8 @@ static VkResult gen_init(struct afmf_device *dev, struct afmf_swapchain *sc)
         res = dev->fns.create_semaphore(dev->handle, &semaphore, NULL, &sc->sem_generated[i]);
         if (res == VK_SUCCESS)
             res = dev->fns.create_semaphore(dev->handle, &semaphore, NULL, &sc->sem_real[i]);
+        if (res == VK_SUCCESS)
+            res = dev->fns.create_semaphore(dev->handle, &semaphore, NULL, &sc->sem_app[i]);
         if (res == VK_SUCCESS)
             res = dev->fns.create_fence(dev->handle, &fence, NULL, &sc->slots[i].fence);
         if (res != VK_SUCCESS)
@@ -372,6 +406,8 @@ static void gen_teardown(struct afmf_device *dev, struct afmf_swapchain *sc)
             f->destroy_semaphore(dev->handle, sc->sem_generated[i], NULL);
         if (sc->sem_real != NULL && sc->sem_real[i] != VK_NULL_HANDLE)
             f->destroy_semaphore(dev->handle, sc->sem_real[i], NULL);
+        if (sc->sem_app != NULL && sc->sem_app[i] != VK_NULL_HANDLE)
+            f->destroy_semaphore(dev->handle, sc->sem_app[i], NULL);
     }
     if (sc->history != VK_NULL_HANDLE)
         f->destroy_image(dev->handle, sc->history, NULL);
@@ -379,10 +415,12 @@ static void gen_teardown(struct afmf_device *dev, struct afmf_swapchain *sc)
         f->free_memory(dev->handle, sc->history_memory, NULL);
     free(sc->slots);
     free(sc->sem_real);
+    free(sc->sem_app);
     free(sc->sem_generated);
     free(sc->images);
     sc->slots = NULL;
     sc->sem_real = NULL;
+    sc->sem_app = NULL;
     sc->sem_generated = NULL;
     sc->images = NULL;
     sc->pool = VK_NULL_HANDLE;
@@ -668,6 +706,9 @@ VkResult afmf_swapchain_create(struct afmf_device *dev, const VkSwapchainCreateI
     pthread_mutex_init(&sc->wsi_lock, NULL);
     pthread_mutex_init(&sc->wsi_turn, NULL);
     pthread_mutex_init(&sc->job_lock, NULL);
+    pthread_mutex_init(&sc->work_lock, NULL);
+    pthread_cond_init(&sc->work_cond, NULL);
+    pthread_cond_init(&sc->work_drain_cond, NULL);
     pthread_condattr_t monotonic;
     pthread_condattr_init(&monotonic);
     pthread_condattr_setclock(&monotonic, CLOCK_MONOTONIC);
@@ -709,6 +750,9 @@ static void report_and_free(struct afmf_device *dev, struct afmf_swapchain *sc)
               sc->skipped_no_image + sc->skipped_no_history + sc->reduced_frames,
               sc->skipped_no_image, sc->skipped_no_history, sc->reduced_frames);
     gen_teardown(dev, sc);
+    pthread_cond_destroy(&sc->work_drain_cond);
+    pthread_cond_destroy(&sc->work_cond);
+    pthread_mutex_destroy(&sc->work_lock);
     pthread_cond_destroy(&sc->drain_cond);
     pthread_cond_destroy(&sc->job_cond);
     pthread_mutex_destroy(&sc->job_lock);
@@ -884,9 +928,11 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
              * and a single hitch moves it by at most a factor of two: a 100 ms frame in a
              * 6 ms cadence must not turn the next holds into 20 ms ones and trip the fps floor. */
             if (dt < 250.0) {
+                pthread_mutex_lock(&sc->job_lock); /* the work thread reads it for the governor and the pacing */
                 if (sc->frame_ms_ema > 0.0 && dt > 2.0 * sc->frame_ms_ema)
                     dt = 2.0 * sc->frame_ms_ema;
                 sc->frame_ms_ema = sc->frame_ms_ema == 0.0 ? dt : 0.9 * sc->frame_ms_ema + 0.1 * dt;
+                pthread_mutex_unlock(&sc->job_lock);
             }
         }
         sc->last_present = now;
@@ -895,21 +941,21 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
     if (sc->frame_time_samples == AFMF_STATS_INTERVAL) {
         double n = (double)sc->frame_time_samples;
         double frame_ms = sc->frame_time_ms_accum / n;
-        /* Where the application's thread waits: with AFMF_PROFILE this is the number that says
-         * whether the layer costs the game host time (the GPU work is off its queue). */
+        /* Where the application's thread waits (the hook: with AFMF_PROFILE this is the number
+         * that says whether the layer costs the game host time), then the layer's two threads. */
 #define STATS_LINE                                                                                \
     "swapchain %p: %" PRIu64 " presents, %" PRIu64 " generated, %" PRIu64 " no free image; "    \
-    "%.2f ms between presents (%.0f real fps); in the layer %.0f us per present: slot fence "   \
-    "%.0f, acquire %.0f, record %.0f, submit %.0f; presentation thread: present generated "   \
-    "%.0f, present real %.0f, refill %.0f, gpu done +%.2f ms, pacing hold %.2f ms; governor "    \
-    "step %u"
+    "%.2f ms between presents (%.0f real fps); in the hook %.0f us per present; work thread: "  \
+    "slot fence %.0f, acquire %.0f, record %.0f, submit %.0f; presentation thread: present "     \
+    "generated %.0f, present real %.0f, refill %.0f, gpu done +%.2f ms, pacing hold %.2f ms; "  \
+    "governor step %u"
 #define STATS_ARGS                                                                                \
     (void *)sc->handle, sc->present_count, sc->generated, sc->skipped_no_image, frame_ms,       \
         1e3 / frame_ms, 1e3 * sc->hook_ms / n, 1e3 * sc->fence_ms / n, 1e3 * sc->acquire_ms / n, \
         1e3 * sc->record_ms / n, 1e3 * sc->submit_ms / n, 1e3 * sc->present_ms / n,             \
         1e3 * sc->present_real_ms / n, 1e3 * sc->refill_ms / n, sc->gpu_delay_ms / n,           \
         sc->hold_ms / n, sc->governor_step
-        pthread_mutex_lock(&sc->job_lock); /* the presentation thread's counters */
+        pthread_mutex_lock(&sc->job_lock); /* the threads' counters */
         if (afmf_config_get()->profile)
             AFMF_INFO(STATS_LINE, STATS_ARGS);
         else
@@ -917,16 +963,17 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
 #undef STATS_LINE
 #undef STATS_ARGS
         sc->present_ms = sc->present_real_ms = sc->refill_ms = sc->gpu_delay_ms = sc->hold_ms = 0.0;
+        sc->fence_ms = sc->acquire_ms = sc->record_ms = sc->submit_ms = 0.0;
         pthread_mutex_unlock(&sc->job_lock);
         sc->frame_time_ms_accum = 0.0;
         sc->frame_time_samples = 0;
-        sc->hook_ms = sc->fence_ms = sc->acquire_ms = sc->record_ms = sc->submit_ms = 0.0;
+        sc->hook_ms = 0.0;
     }
     pthread_mutex_unlock(&dev->lock);
 }
 
 /* Whether this present gets a companion, after the governor has looked at how late the last
- * generated frame was ready and at the real frame rate. Called with dev->lock held. */
+ * generated frame was ready and at the real frame rate. Called with job_lock held. */
 static bool governor_allows(struct afmf_swapchain *sc, double last_delay_ms)
 {
     const struct afmf_config *cfg = afmf_config_get();
@@ -1065,7 +1112,7 @@ static VkResult present_one(struct afmf_device *dev, struct afmf_swapchain *sc, 
 #endif
     VkPresentInfoKHR present = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-        .waitSemaphoreCount = 1,
+        .waitSemaphoreCount = wait != VK_NULL_HANDLE ? 1u : 0u,
         .pWaitSemaphores = &wait,
         .swapchainCount = 1,
         .pSwapchains = &sc->handle,
@@ -1167,8 +1214,9 @@ static void *presenter_main(void *arg)
             }
         }
         pthread_mutex_unlock(&sc->job_lock);
-        VkResult second = present_one(dev, sc, job.real_image, sc->sem_real[job.real_image], &job,
-                                      true);
+        VkResult second = present_one(dev, sc, job.real_image,
+                                      job.real_unwaited ? VK_NULL_HANDLE : sc->sem_real[job.real_image],
+                                      &job, true);
 
         /* Line up the next companion's image while the application renders. */
         struct timespec r0, r1;
@@ -1187,33 +1235,241 @@ static void *presenter_main(void *arg)
             sc->deferred_result = worst;
         sc->job_head = (sc->job_head + 1) % AFMF_MAX_JOBS;
         sc->job_count--;
-        /* Both waiters re-check their own condition: the drain wants zero, a full queue wants
-         * one free slot. */
+        sc->in_flight--;
+        /* Every waiter re-checks its own condition: the drain wants zero, the hook wants a
+         * frame in flight fewer than the images. */
         pthread_cond_broadcast(&sc->drain_cond);
     }
     pthread_mutex_unlock(&sc->job_lock);
     return NULL;
 }
 
-/* Starts the thread on first use; false leaves the presents on the application's thread. */
+/* ---- work thread --------------------------------------------------------------------------- */
+
+/* The frame's work behind the hook: the slot's fence, the governor, the spare, recording and
+ * the submission, which waits on `waits` (the application's semaphores inline; from the work
+ * thread the slot's adapter semaphore, signalled once they are). Fills the job's companion and
+ * pacing; the slot is pending on success. Inline (`threaded` false) the swapchain lock and the
+ * layer's queue lock stay held on success for the presents that follow, in the thread's order. */
+static VkResult frame_generate(struct afmf_device *dev, struct afmf_swapchain *sc, VkQueue queue,
+                               uint32_t slot_index, const VkSemaphore *waits, uint32_t wait_count,
+                               bool threaded, struct afmf_present_job *job)
+{
+    const struct afmf_device_fns *f = &dev->fns;
+    struct afmf_slot *slot = &sc->slots[slot_index];
+    uint32_t i = job->real_image;
+    struct timespec t_start, t_fence, t_acquire, t_record, t_submit;
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_start);
+
+    if (slot->pending) {
+        (void)f->wait_for_fences(dev->handle, 1, &slot->fence, VK_TRUE, UINT64_MAX);
+        (void)f->reset_fences(dev->handle, 1, &slot->fence);
+        slot->pending = false;
+    }
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_fence);
+
+    /* The image the generated frame goes into: the spare, if the presentation engine has one
+     * for us; otherwise this frame simply gets no companion, the application never waits. */
+    bool generate = false;
+    uint32_t j = 0;
+    pthread_mutex_lock(&sc->job_lock);
+    bool allowed = governor_allows(sc, sc->last_delay_ms);
+    bool have_history = sc->have_history;
+    if (!have_history)
+        sc->skipped_no_history++;
+    pthread_mutex_unlock(&sc->job_lock);
+    if (have_history && allowed) {
+        generate = spare_take(dev, sc, &j);
+        if (!generate) {
+            pthread_mutex_lock(&sc->job_lock);
+            sc->skipped_no_image++;
+            pthread_mutex_unlock(&sc->job_lock);
+        }
+    }
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_acquire);
+
+    VkResult res = record_frame(dev, sc, slot->cmd, slot_index, i, generate, j);
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_record);
+    if (res == VK_SUCCESS) {
+        VkPipelineStageFlags stages[AFMF_MAX_APP_WAITS];
+        for (uint32_t k = 0; k < wait_count; k++)
+            stages[k] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        VkSemaphore signals[2] = {sc->sem_real[i], generate ? sc->sem_generated[j] : VK_NULL_HANDLE};
+        VkSubmitInfo submit = {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .waitSemaphoreCount = wait_count,
+            .pWaitSemaphores = waits,
+            .pWaitDstStageMask = stages,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &slot->cmd,
+            .signalSemaphoreCount = generate ? 2u : 1u,
+            .pSignalSemaphores = signals,
+        };
+        if (!threaded)
+            wsi_take(sc);
+        if (sc->async)
+            pthread_mutex_lock(&dev->async_lock);
+        res = f->queue_submit(queue, 1, &submit, slot->fence);
+        if (sc->async && (res != VK_SUCCESS || threaded))
+            pthread_mutex_unlock(&dev->async_lock);
+        if (!threaded && res != VK_SUCCESS)
+            wsi_give(sc);
+    }
+    (void)clock_gettime(CLOCK_MONOTONIC, &t_submit);
+
+    pthread_mutex_lock(&sc->job_lock);
+    sc->fence_ms += elapsed_ms(&t_start, &t_fence);
+    sc->acquire_ms += elapsed_ms(&t_fence, &t_acquire);
+    sc->record_ms += elapsed_ms(&t_acquire, &t_record);
+    sc->submit_ms += elapsed_ms(&t_record, &t_submit);
+    if (res == VK_SUCCESS) {
+        sc->have_history = true;
+        if (generate)
+            sc->generated++;
+    }
+    pthread_mutex_unlock(&sc->job_lock);
+    if (res != VK_SUCCESS)
+        return res; /* the image acquired for the generated frame, if any, stays with the engine */
+
+    slot->pending = true;
+    job->generate = generate;
+    job->companion_image = j;
+    job->done = slot->fence;
+
+    /* Debug dumps block on the submission; only while AFMF_DUMP_DIR asks for frames. */
+    if (generate && sc->fg != NULL && afmf_framegen_dump_recorded(sc->fg)) {
+        (void)f->wait_for_fences(dev->handle, 1, &slot->fence, VK_TRUE, UINT64_MAX);
+        afmf_framegen_dump_write(dev, sc->fg);
+        (void)clock_gettime(CLOCK_MONOTONIC, &job->arrival); /* the pacing and the governor start after the stall */
+    }
+
+    if (generate && threaded && afmf_config_get()->pacing) {
+        pthread_mutex_lock(&sc->job_lock);
+        double half_ms = sc->frame_ms_ema / 2.0;
+        pthread_mutex_unlock(&sc->job_lock);
+        uint64_t hold = (uint64_t)(half_ms * 1e6);
+        job->hold_ns = hold < AFMF_PACING_MIN_NS   ? 0
+                       : hold > AFMF_PACING_MAX_NS ? AFMF_PACING_MAX_NS
+                                                   : hold;
+    }
+    return VK_SUCCESS;
+}
+
+static void *worker_main(void *arg)
+{
+    struct afmf_swapchain *sc = arg;
+    struct afmf_device *dev = sc->dev;
+
+    pthread_mutex_lock(&sc->work_lock);
+    for (;;) {
+        while (sc->work_count == 0 && !sc->worker_stop)
+            pthread_cond_wait(&sc->work_cond, &sc->work_lock);
+        if (sc->work_count == 0)
+            break; /* stopping, and drained */
+        struct afmf_frame_job work = sc->work[sc->work_head];
+        sc->worker_busy = true;
+        pthread_mutex_unlock(&sc->work_lock);
+
+        VkResult res = frame_generate(dev, sc, dev->async_queue, work.slot, &sc->sem_app[work.slot],
+                                      1, true, &work.present);
+        if (res != VK_SUCCESS) {
+            /* The hook already consumed the application's semaphores into the slot's: the real
+             * frame's present still needs sem_real, or it waits forever. One submission with
+             * nothing to run passes the signal on; if that fails too, the present goes out
+             * without its wait rather than never. Generation stops at the hook's next call. */
+            VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            VkSubmitInfo pass = {
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .waitSemaphoreCount = 1,
+                .pWaitSemaphores = &sc->sem_app[work.slot],
+                .pWaitDstStageMask = &stage,
+                .signalSemaphoreCount = 1,
+                .pSignalSemaphores = &sc->sem_real[work.present.real_image],
+            };
+            pthread_mutex_lock(&dev->async_lock);
+            VkResult passed = dev->fns.queue_submit(dev->async_queue, 1, &pass, VK_NULL_HANDLE);
+            pthread_mutex_unlock(&dev->async_lock);
+            work.present.generate = false;
+            work.present.real_unwaited = passed != VK_SUCCESS;
+            pthread_mutex_lock(&sc->job_lock);
+            if (sc->deferred_result >= 0)
+                sc->deferred_result = res;
+            sc->worker_failed = true;
+            pthread_mutex_unlock(&sc->job_lock);
+        }
+
+        /* Hand both presents to the presentation thread. */
+        pthread_mutex_lock(&sc->job_lock);
+        while (sc->job_count == AFMF_MAX_JOBS)
+            pthread_cond_wait(&sc->drain_cond, &sc->job_lock);
+        sc->jobs[(sc->job_head + sc->job_count) % AFMF_MAX_JOBS] = work.present;
+        sc->job_count++;
+        pthread_cond_broadcast(&sc->job_cond);
+        pthread_mutex_unlock(&sc->job_lock);
+
+        pthread_mutex_lock(&sc->work_lock);
+        sc->work_head = (sc->work_head + 1) % AFMF_MAX_JOBS;
+        sc->work_count--;
+        sc->worker_busy = false;
+        pthread_cond_broadcast(&sc->work_drain_cond);
+    }
+    pthread_mutex_unlock(&sc->work_lock);
+    return NULL;
+}
+
+/* Waits until every queued frame has been submitted and handed on. */
+static void worker_drain(struct afmf_swapchain *sc)
+{
+    if (!sc->worker_running)
+        return;
+    pthread_mutex_lock(&sc->work_lock);
+    while (sc->work_count > 0 || sc->worker_busy)
+        pthread_cond_wait(&sc->work_drain_cond, &sc->work_lock);
+    pthread_mutex_unlock(&sc->work_lock);
+}
+
+/* Drains and joins; safe to call more than once and without a running thread. */
+static void worker_stop(struct afmf_swapchain *sc)
+{
+    if (!sc->worker_running)
+        return;
+    pthread_mutex_lock(&sc->work_lock);
+    sc->worker_stop = true;
+    pthread_cond_broadcast(&sc->work_cond);
+    pthread_mutex_unlock(&sc->work_lock);
+    (void)pthread_join(sc->worker, NULL);
+    sc->worker_running = false;
+}
+
+/* Starts both threads on first use; false leaves everything on the application's thread. */
 static bool presenter_start(struct afmf_swapchain *sc)
 {
-    if (sc->presenter_running)
+    if (sc->presenter_running && sc->worker_running)
         return true;
-    if (!sc->async || sc->presenter_stop)
+    if (!sc->async || sc->presenter_stop || sc->worker_stop)
         return false;
-    if (pthread_create(&sc->presenter, NULL, presenter_main, sc) != 0) {
-        AFMF_WARN("swapchain %p: no presentation thread; presenting inline", (void *)sc->handle);
-        sc->presenter_stop = true; /* do not retry every frame */
+    if (!sc->presenter_running) {
+        if (pthread_create(&sc->presenter, NULL, presenter_main, sc) != 0) {
+            AFMF_WARN("swapchain %p: no presentation thread; presenting inline", (void *)sc->handle);
+            sc->presenter_stop = true; /* do not retry every frame */
+            return false;
+        }
+        sc->presenter_running = true;
+    }
+    if (pthread_create(&sc->worker, NULL, worker_main, sc) != 0) {
+        AFMF_WARN("swapchain %p: no work thread; presenting inline", (void *)sc->handle);
+        sc->worker_stop = true;
         return false;
     }
-    sc->presenter_running = true;
+    sc->worker_running = true;
     return true;
 }
 
-/* Waits until every queued present went out: needed before presenting inline behind them. */
+/* Waits until every queued frame was submitted and every queued present went out: needed
+ * before presenting inline behind them. */
 static void presenter_drain(struct afmf_swapchain *sc)
 {
+    worker_drain(sc);
     if (!sc->presenter_running)
         return;
     pthread_mutex_lock(&sc->job_lock);
@@ -1222,9 +1478,11 @@ static void presenter_drain(struct afmf_swapchain *sc)
     pthread_mutex_unlock(&sc->job_lock);
 }
 
-/* Drains and joins; safe to call more than once and without a running thread. */
+/* Drains and joins both threads, the work thread first (it feeds the other); safe to call more
+ * than once and without running threads. */
 static void presenter_stop(struct afmf_swapchain *sc)
 {
+    worker_stop(sc);
     if (!sc->presenter_running)
         return;
     pthread_mutex_lock(&sc->job_lock);
@@ -1388,137 +1646,90 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     struct afmf_present_job job = {.real_image = i};
     bool threaded = presenter_start(sc) && job_from_chain(sc, info, &job);
     if (!threaded)
-        presenter_drain(sc); /* a chain the thread cannot carry: inline, but in order */
+        presenter_drain(sc); /* a chain the threads cannot carry: inline, but in order */
 
-    struct timespec t_start, t_fence, t_acquire, t_record, t_submit, t_present, t_companion, t_real,
-        t_end;
+    struct timespec t_start, t_present, t_companion, t_real, t_end;
     (void)clock_gettime(CLOCK_MONOTONIC, &t_start);
     job.arrival = t_start;
-
-    struct afmf_slot *slot = &sc->slots[sc->slot_index];
-    if (threaded) {
-        /* The presentation thread waits on this slot's fence for its pacing; the reset below
-         * must not race that wait, so the job that last used the slot has to be done. */
-        pthread_mutex_lock(&sc->job_lock);
-        while (sc->job_count >= sc->image_count && !sc->presenter_stop)
-            pthread_cond_wait(&sc->drain_cond, &sc->job_lock);
-        pthread_mutex_unlock(&sc->job_lock);
-    }
-    if (slot->pending) {
-        (void)f->wait_for_fences(dev->handle, 1, &slot->fence, VK_TRUE, UINT64_MAX);
-        (void)f->reset_fences(dev->handle, 1, &slot->fence);
-        slot->pending = false;
-    }
-    (void)clock_gettime(CLOCK_MONOTONIC, &t_fence);
-
-    /* The image the generated frame goes into: the spare, if the presentation engine has one
-     * for us; otherwise this frame simply gets no companion, the application never waits. */
-    bool generate = false;
-    uint32_t j = 0;
-    pthread_mutex_lock(&sc->job_lock);
-    double last_delay_ms = sc->last_delay_ms;
-    pthread_mutex_unlock(&sc->job_lock);
-    pthread_mutex_lock(&dev->lock);
-    bool allowed = governor_allows(sc, last_delay_ms);
-    pthread_mutex_unlock(&dev->lock);
-    if (!sc->have_history) {
-        sc->skipped_no_history++;
-    } else if (allowed) {
-        generate = spare_take(dev, sc, &j);
-        if (!generate)
-            sc->skipped_no_image++;
-    }
-    (void)clock_gettime(CLOCK_MONOTONIC, &t_acquire);
-
-    VkResult res = record_frame(dev, sc, slot->cmd, sc->slot_index, i, generate, j);
-    (void)clock_gettime(CLOCK_MONOTONIC, &t_record);
-    if (res == VK_SUCCESS) {
-        VkSemaphore waits[AFMF_MAX_APP_WAITS];
-        VkPipelineStageFlags stages[AFMF_MAX_APP_WAITS];
-        uint32_t wait_count = 0;
-        /* Only the application's semaphores: the spare's release was waited on the host. */
-        for (uint32_t k = 0; k < info->waitSemaphoreCount; k++) {
-            waits[wait_count] = info->pWaitSemaphores[k];
-            stages[wait_count++] = VK_PIPELINE_STAGE_TRANSFER_BIT;
-        }
-        VkSemaphore signals[2] = {sc->sem_real[i], generate ? sc->sem_generated[j] : VK_NULL_HANDLE};
-        VkSubmitInfo submit = {
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .waitSemaphoreCount = wait_count,
-            .pWaitSemaphores = waits,
-            .pWaitDstStageMask = stages,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &slot->cmd,
-            .signalSemaphoreCount = generate ? 2u : 1u,
-            .pSignalSemaphores = signals,
-        };
-        /* Inline presents follow under the same locks, in the thread's order: swapchain, then
-         * queue. */
-        if (!threaded)
-            wsi_take(sc);
-        if (sc->async)
-            pthread_mutex_lock(&dev->async_lock);
-        res = f->queue_submit(work_queue, 1, &submit, slot->fence);
-        if (sc->async && (res != VK_SUCCESS || threaded))
-            pthread_mutex_unlock(&dev->async_lock);
-        if (!threaded && res != VK_SUCCESS)
-            wsi_give(sc);
-    }
-    (void)clock_gettime(CLOCK_MONOTONIC, &t_submit);
-    sc->record_ms += elapsed_ms(&t_acquire, &t_record);
-    sc->submit_ms += elapsed_ms(&t_record, &t_submit);
-    if (res != VK_SUCCESS) {
-        /* The application's semaphores were not consumed, so its own present still works. The
-         * image acquired for the generated frame, if any, stays with the presentation engine. */
-        gen_disable(sc, "layer submission failed");
-        return afmf_device_queue_present(dev, queue, info);
-    }
-    slot->pending = true;
+    uint32_t slot_index = sc->slot_index;
     sc->slot_index = (sc->slot_index + 1) % sc->image_count;
-    sc->have_history = true;
-    if (generate)
-        sc->generated++;
-
-    /* Debug dumps block on the submission; only while AFMF_DUMP_DIR asks for frames. */
-    if (generate && sc->fg != NULL && afmf_framegen_dump_recorded(sc->fg)) {
-        (void)f->wait_for_fences(dev->handle, 1, &slot->fence, VK_TRUE, UINT64_MAX);
-        afmf_framegen_dump_write(dev, sc->fg);
-        (void)clock_gettime(CLOCK_MONOTONIC, &job.arrival); /* the pacing and the governor start after the stall */
-    }
 
     if (threaded) {
-        /* Hand both presents to the presentation thread and return. The results of earlier
-         * presents come back here; the application also learns OUT_OF_DATE from its acquire. */
-        job.generate = generate;
-        job.companion_image = j;
-        if (generate && afmf_config_get()->pacing) {
-            pthread_mutex_lock(&dev->lock);
-            double half_ms = sc->frame_ms_ema / 2.0;
-            pthread_mutex_unlock(&dev->lock);
-            uint64_t hold = (uint64_t)(half_ms * 1e6);
-            job.hold_ns = hold < AFMF_PACING_MIN_NS   ? 0
-                          : hold > AFMF_PACING_MAX_NS ? AFMF_PACING_MAX_NS
-                                                      : hold;
-            job.done = slot->fence;
-        }
+        /* A slot comes round again after image_count frames, and the presentation thread waits
+         * on its fence for the pacing: that frame has to be done before the work thread resets
+         * it, so at most image_count frames are in flight between here and their presents. */
         pthread_mutex_lock(&sc->job_lock);
-        while (sc->job_count == AFMF_MAX_JOBS)
+        while (sc->in_flight >= sc->image_count && !sc->presenter_stop)
             pthread_cond_wait(&sc->drain_cond, &sc->job_lock);
-        sc->jobs[(sc->job_head + sc->job_count) % AFMF_MAX_JOBS] = job;
-        sc->job_count++;
-        pthread_cond_broadcast(&sc->job_cond);
+        sc->in_flight++;
+        pthread_mutex_unlock(&sc->job_lock);
+
+        /* The application's semaphores are consumed before the call returns, as it expects:
+         * one submission with nothing to run turns them into the slot's semaphore, which the
+         * work thread's submission waits on. */
+        VkPipelineStageFlags stages[AFMF_MAX_APP_WAITS];
+        for (uint32_t k = 0; k < info->waitSemaphoreCount; k++)
+            stages[k] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        VkSubmitInfo adapter = {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .waitSemaphoreCount = info->waitSemaphoreCount,
+            .pWaitSemaphores = info->pWaitSemaphores,
+            .pWaitDstStageMask = stages,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &sc->sem_app[slot_index],
+        };
+        pthread_mutex_lock(&dev->async_lock);
+        VkResult res = f->queue_submit(work_queue, 1, &adapter, VK_NULL_HANDLE);
+        pthread_mutex_unlock(&dev->async_lock);
+        if (res != VK_SUCCESS) {
+            /* Nothing consumed: the application's own present still works. */
+            pthread_mutex_lock(&sc->job_lock);
+            sc->in_flight--;
+            pthread_cond_broadcast(&sc->drain_cond);
+            pthread_mutex_unlock(&sc->job_lock);
+            sc->slot_index = slot_index;
+            gen_disable(sc, "layer submission failed");
+            return afmf_device_queue_present(dev, queue, info);
+        }
+
+        struct afmf_frame_job work = {.slot = slot_index, .present = job};
+        pthread_mutex_lock(&sc->work_lock);
+        while (sc->work_count == AFMF_MAX_JOBS)
+            pthread_cond_wait(&sc->work_drain_cond, &sc->work_lock);
+        sc->work[(sc->work_head + sc->work_count) % AFMF_MAX_JOBS] = work;
+        sc->work_count++;
+        pthread_cond_broadcast(&sc->work_cond);
+        pthread_mutex_unlock(&sc->work_lock);
+
+        /* The results of earlier presents come back here; the application also learns
+         * OUT_OF_DATE from its acquire. */
+        pthread_mutex_lock(&sc->job_lock);
         res = sc->deferred_result;
         sc->deferred_result = VK_SUCCESS;
+        bool failed = sc->worker_failed;
         pthread_mutex_unlock(&sc->job_lock);
         if (info->pResults != NULL)
             info->pResults[0] = res;
+        if (failed)
+            gen_disable(sc, "layer submission failed"); /* after this frame's presents */
 
         (void)clock_gettime(CLOCK_MONOTONIC, &t_end);
         sc->hook_ms += elapsed_ms(&t_start, &t_end);
-        sc->fence_ms += elapsed_ms(&t_start, &t_fence);
-        sc->acquire_ms += elapsed_ms(&t_fence, &t_acquire);
         return res;
     }
+
+    /* Inline: everything here, in the application's thread, under the swapchain lock (and the
+     * layer's queue lock) from the submission to the last present. */
+    VkResult res = frame_generate(dev, sc, work_queue, slot_index, info->pWaitSemaphores,
+                                  info->waitSemaphoreCount, false, &job);
+    if (res != VK_SUCCESS) {
+        /* The application's semaphores were not consumed, so its own present still works. */
+        sc->slot_index = slot_index;
+        gen_disable(sc, "layer submission failed");
+        return afmf_device_queue_present(dev, queue, info);
+    }
+    bool generate = job.generate;
+    uint32_t j = job.companion_image;
 
     (void)clock_gettime(CLOCK_MONOTONIC, &t_present);
     if (generate) {
@@ -1554,11 +1765,11 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
 
     (void)clock_gettime(CLOCK_MONOTONIC, &t_end);
     sc->hook_ms += elapsed_ms(&t_start, &t_end);
-    sc->fence_ms += elapsed_ms(&t_start, &t_fence);
-    sc->acquire_ms += elapsed_ms(&t_fence, &t_acquire);
+    pthread_mutex_lock(&sc->job_lock);
     sc->present_ms += elapsed_ms(&t_present, &t_companion);
     sc->present_real_ms += elapsed_ms(&t_companion, &t_real);
     sc->refill_ms += elapsed_ms(&t_real, &t_end);
+    pthread_mutex_unlock(&sc->job_lock);
     return res;
 }
 

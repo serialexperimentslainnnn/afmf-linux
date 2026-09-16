@@ -62,13 +62,13 @@ not. Leave the in-game setting as it is on Windows with AFMF.
    FidelityFX Optical Flow (luma pyramid, scene-change detector, coarse-to-fine 8x8 block search)
    between the previous frame and the new one, and synthesises the frame in between by warping both
    along half the estimated motion.
-3. A presentation thread of the layer presents the generated frame at once and the real frame
-   half a frame later, so the two land evenly spaced on screen, the same pacing AMD's AFMF uses
-   (`AFMF_PACING=0` turns it off). The GPU work runs on a
-   compute queue of the layer's own (or, when the application took every compute queue, as
-   vkd3d-proton does, on the application's last one, serialised with its use), so the graphics
-   queue never waits for it, and the application's thread returns as soon as the work is
-   submitted.
+3. The present call only hands the frame to a work thread of the layer, which records and
+   submits the GPU work, and a presentation thread presents the generated frame at once and the
+   real frame half a frame later, so the two land evenly spaced on screen, the same pacing AMD's
+   AFMF uses (`AFMF_PACING=0` turns it off). The GPU work runs on a compute queue of the layer's
+   own (or, when the application took every compute queue, as vkd3d-proton does, on the
+   application's last one, serialised with its use), so the graphics queue never waits for it,
+   and the application's thread is back in the game within tens of microseconds.
 
 Where the flow cannot be trusted (scene cut, motion beyond 64 px) the pixel falls back to the
 previous frame or to a blend, selectable with `AFMF_FAST_MOTION_RESPONSE`.

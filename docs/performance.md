@@ -37,10 +37,12 @@ headless test's still picture the whole frame is 370-430 &micro;s. All of it run
 queue of the layer's own (or the game's last compute queue when the game took them all, as
 vkd3d-proton does), so it competes for the GPU but never sits in the game's queue.
 
-Host, on the game's thread, per present: **120-175 &micro;s under the validation layer** in the
-headless test (slot fence 5, spare image 5, command recording 75-115, submit 35-45); the
-previous release measured 235-400 on the same run, and 76-91 in a game without validation. The
-two presents and the pacing hold run on the layer's presentation thread.
+Host, on the game's thread, per present: **11 &micro;s under the validation layer** in the
+headless test: the hook only consumes the game's semaphores and queues the frame. The slot's
+fence, the spare image, recording and the submission (150-200 &micro;s together) run on the
+layer's work thread, the two presents and the pacing hold on its presentation thread. The
+previous release spent 278-284 &micro;s on the game's thread on the same run, and 76-91 in a game
+without validation.
 
 ## How the numbers were reached
 
@@ -52,6 +54,7 @@ two presents and the pacing hold run on the layer's presentation thread.
 | Companion image acquired a frame ahead instead of waited for | host time in the present hook 5.9 ms &rarr; 60 &micro;s (FIFO desktop) |
 | Shared compute queue when the game holds every compute queue | GPU work off the graphics queue in vkd3d-proton titles |
 | Presentation thread with half-frame pacing | hook 546 &rarr; 80 &micro;s in game; generated frames evenly spaced |
+| Work thread: the hook only queues the frame | hook 120-175 &rarr; 11 &micro;s (headless, validation layer on) |
 | Flow and interpolation pre-recorded into secondary command buffers | recording in the hook 170-190 &rarr; 80-117 &micro;s (headless, validation layer on) |
 | Direct output into the swapchain image (`AFMF_DIRECT_OUTPUT=1`, opt-in) | output copy 9-17 &micro;s &rarr; 0 on the GPU; the interpolate dispatch moves to the per-frame primary (+10-20 &micro;s of recording under validation); what storage usage costs the game's own rendering is per game and not measured here |
 | Fused ingest (`AFMF_DIRECT_INGEST`), detector alongside the pyramid and the coarsest search, four predictions checked at once | one read of the game's frame instead of a copy plus a luma read; the detector's two passes fill the pyramid's and the coarse levels' idle time instead of adding their own; fewer barriers per group in the search |
@@ -65,6 +68,20 @@ runs each): on the still picture, host time in the present hook 233-275 &rarr; 1
 GPU per generated frame 584 &rarr; 409-432 &micro;s at half resolution and 1123-1141 &rarr; 367-424 at
 full; on the full-frame pan, 825-840 &micro;s with the old default against 700-760 with the new
 one at four times the blocks and seven levels.
+
+## Threads and queues
+
+The game's thread only consumes its semaphores with an empty submission and queues the frame.
+A work thread waits the slot's fence, takes the companion's image, records and submits; a
+presentation thread presents the generated frame, holds the real one back half a frame and
+presents it, then acquires the next spare. On the GPU, everything runs on one compute queue of
+the layer's own: within a frame the passes form a dependency chain (ingest, pyramid, search
+level by level, filter, scale, interpolation), and only the scene change detector is
+independent, so it runs alongside the pyramid and the coarsest search with no barrier of its
+own. A second queue would overlap one frame's interpolation with the next frame's ingest, but
+the next frame arrives milliseconds later and the layer's whole frame takes under one: the two
+would never coincide. On a GPU the game keeps at 100 %, what the layer costs is the sum of its
+dispatches, and that is what the table above measures.
 
 Two things learned from the screenshots' games that are worth more than a number: id Tech 8
 (DOOM) aborts if a swapchain has more than 8 images, so `AFMF_EXTRA_IMAGES` above 5 kills it

@@ -308,6 +308,18 @@ set_tests_properties(headless_present_mode_keep PROPERTIES
     FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|present mode 1"
     SKIP_RETURN_CODE 77
 )
+# Teardown with frames still in the layer's threads: unpaced presents keep the work and the
+# presentation thread busy, and the swapchain is destroyed without the vkDeviceWaitIdle that
+# would drain them first. Its destruction must drain both, without a deadlock or a leak (the
+# sanitizer build runs this too).
+add_test(NAME headless_async_drain COMMAND afmf_headless)
+set_tests_properties(headless_async_drain PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_TEST_NO_IDLE=1;AFMF_ACQUIRE_TIMEOUT_US=16000;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "destroyed after 120 presents"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|still alive at device destruction"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 60
+)
 
 if(AFMF_SANITIZE)
     foreach(target afmf-linux afmf_headless)

@@ -55,7 +55,7 @@ to a bug report.
 [AFMF info] surface 0x... created: Wayland
 [AFMF info] interpolation ready: 3440x1440, flow at 1720x720 (215x90 blocks of 16 px), 5 pyramid levels
 [AFMF info] swapchain 0x... created: 3440x1440, format 37, present mode 1 (app asked 2), 5 images (app asked 3), generation on (layer queue)
-[AFMF info] swapchain 0x...: 3001 presents, 2999 generated, 0 no free image; 8.05 ms between presents (124 real fps); in the layer 85 us per present: slot fence 2, acquire 3, record 41, submit 35; presentation thread: present generated 279, present real 252, refill 29, gpu done +0.41 ms, pacing hold 4.53 ms; governor step 0
+[AFMF info] swapchain 0x...: 3001 presents, 2999 generated, 0 no free image; 8.05 ms between presents (124 real fps); in the hook 31 us per present; work thread: slot fence 2, acquire 3, record 41, submit 35; presentation thread: present generated 279, present real 252, refill 29, gpu done +0.41 ms, pacing hold 4.53 ms; governor step 0
 [AFMF info] swapchain 0x... destroyed after 26381 presents: 26380 generated, 1 skipped (0 no free image, 1 no history, 0 held back by the governor)
 ```
 
@@ -65,8 +65,10 @@ to a bug report.
 - **no free image** counts presents that got no companion because the presentation engine had no
   image to give; a game in FIFO at the display's refresh rate has none to give, and Gamescope
   keeps more in flight than a desktop compositor (`AFMF_GAMESCOPE=1`).
-- **in the layer** is host time on the game's thread per present; **presentation thread** is the
-  layer's own thread, off the game's critical path.
+- **in the hook** is host time on the game's thread per present: it consumes the game's
+  semaphores with an empty submission and queues the frame. **work thread** (the slot's fence,
+  the companion's image, recording, the submission) and **presentation thread** (both presents,
+  the pacing hold, the next spare) are the layer's own threads, off the game's critical path.
 - **gpu done** is how long after the present call the generated frame was ready; **pacing hold**
   is how long the real frame was held back: half the frame time from that point, capped at a frame.
 - **governor step** is where `AFMF_GOVERNOR` sits: `0` every frame with the full search, `1` every

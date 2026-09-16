@@ -101,6 +101,16 @@ static bool wanted_pan(void)
     return v != NULL && v[0] == '1';
 }
 
+/* AFMF_TEST_NO_IDLE=1: no vkDeviceWaitIdle before teardown, where the layer drains its
+ * threads; the swapchain is destroyed straight after the last present, with the frame still
+ * queued to the work thread or held by the presentation thread, and its destruction has to
+ * drain both itself. */
+static bool wanted_no_idle(void)
+{
+    const char *v = getenv("AFMF_TEST_NO_IDLE");
+    return v != NULL && v[0] == '1';
+}
+
 static bool device_extension_available(VkPhysicalDevice device, const char *name)
 {
     uint32_t n = 0;
@@ -663,6 +673,13 @@ static bool present_frame(struct ctx *ctx, uint32_t frame)
 static void destroy(struct ctx *ctx)
 {
     if (ctx->device != VK_NULL_HANDLE) {
+        if (wanted_no_idle()) {
+            /* The layer's submissions still wait on `ready`: the swapchain goes first, and
+             * with it every frame the layer had in flight. */
+            if (ctx->swapchain != VK_NULL_HANDLE)
+                vkDestroySwapchainKHR(ctx->device, ctx->swapchain, NULL);
+            ctx->swapchain = VK_NULL_HANDLE;
+        }
         (void)vkDeviceWaitIdle(ctx->device);
         if (ctx->staging_mapped != NULL)
             vkUnmapMemory(ctx->device, ctx->staging_memory);

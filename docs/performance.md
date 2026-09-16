@@ -19,16 +19,17 @@ clocks; a game runs it faster):
 
 | Stage | Time |
 |---|---|
-| Ingest (one read of the game's frame into the colour ring and the luma) | 150 &micro;s |
-| Pyramid and scene-change detector | 50 &micro;s |
-| Block search (FidelityFX Optical Flow, 7 levels; packed 16-bit SAD; blocks whose coarser-level vector already matches skip it) | 274 &micro;s |
-| Filter and scale | 123 &micro;s |
-| Interpolation | 74 &micro;s |
-| Output copy | 59 &micro;s (0 with `AFMF_DIRECT_OUTPUT=1`) |
-| **Total** | **700-760 &micro;s** |
+| Ingest (one read of the game's frame into the colour ring and the luma) | 144-166 &micro;s |
+| Pyramid and scene-change detector histogram, side by side | 46-54 &micro;s |
+| Block search (FidelityFX Optical Flow, 7 levels; packed 16-bit SAD; blocks whose coarser-level vector already matches skip it; the detector's divergence overlaps the coarsest level) | 267-282 &micro;s |
+| Filter and scale | 112-119 &micro;s |
+| Interpolation | 65-81 &micro;s |
+| Output copy | 44-59 &micro;s (0 with `AFMF_DIRECT_OUTPUT=1`) |
+| **Total** | **700-760 &micro;s** (previous release, same run: 825-937) |
 
-The previous release's default (flow at half resolution, five levels) costs 840-910 &micro;s on
-the same run: the full-resolution search with all seven levels now costs less than the
+The previous release's default (flow at half resolution, five levels) costs 825-937 &micro;s on
+the same run (ingest copy 166-209 plus a luma pass of 57, pyramid and detector in series, search
+386-410): the full-resolution search with all seven levels now costs less than the
 half-resolution one did, because the sum of absolute differences runs on packed 16-bit pairs
 (`AFMF_SAD_INT16`: the search went from 410 to 274 &micro;s) and a block whose vector from the
 coarser level already matches keeps it instead of searching 256 candidates again

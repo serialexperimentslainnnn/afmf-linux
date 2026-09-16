@@ -74,11 +74,11 @@ one at four times the blocks and seven levels.
 The game's thread only consumes its semaphores with an empty submission and queues the frame.
 A work thread waits the slot's fence, takes the companion's image, records and submits; a
 presentation thread presents the generated frame, holds the real one back half a frame and
-presents it, then acquires the next spare. On the GPU, everything runs on one compute queue of
-the layer's own: within a frame the passes form a dependency chain (ingest, pyramid, search
-level by level, filter, scale, interpolation), and only the scene change detector is
-independent, so it runs alongside the pyramid and the coarsest search with no barrier of its
-own. A second queue would overlap one frame's interpolation with the next frame's ingest, but
+presents it, then acquires the next spare. The pipelines compile on a fourth thread from device
+creation. On the GPU, everything runs on one compute queue of the layer's own: within a frame
+the passes form a dependency chain (ingest, pyramid, search level by level, filter, scale,
+interpolation), and only the scene change detector is independent, so it runs alongside the
+pyramid and the coarsest search with no barrier of its own. A second queue would overlap one frame's interpolation with the next frame's ingest, but
 the next frame arrives milliseconds later and the layer's whole frame takes under one: the two
 would never coincide. On a GPU the game keeps at 100 %, what the layer costs is the sum of its
 dispatches, and that is what the table above measures.

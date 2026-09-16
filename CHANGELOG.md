@@ -57,6 +57,8 @@ All notable changes to afmf-linux are documented here. The format follows
   hands the presents to the presentation thread. The profile line splits the three: `in the
   hook`, `work thread`, `presentation thread`. Test `headless_async_drain` destroys the swapchain
   with frames still in both threads.
+- The layer's pipelines compile on a thread of their own from vkCreateDevice; the first
+  swapchain only waits for what is left instead of compiling everything on the first present.
 - The optical flow and the interpolation are recorded once per (slot, parity, companion) into
   secondary command buffers and executed from then on; the per-frame primary keeps only the
   copies from and to the swapchain images. Host time recording a frame in the present hook:

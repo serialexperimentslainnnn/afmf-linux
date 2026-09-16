@@ -224,8 +224,36 @@ static VkResult create_compute_pipeline(struct afmf_device *dev, const uint32_t 
     return res;
 }
 
+static VkResult pipelines_create(struct afmf_device *dev);
+
+/* Waits for the background compilation, if one was started, so dev->framegen_pipelines and
+ * pipelines_result are settled for the caller. */
+static void pipelines_join(struct afmf_device *dev)
+{
+    if (!dev->pipelines_thread_running)
+        return;
+    (void)pthread_join(dev->pipelines_thread, NULL);
+    dev->pipelines_thread_running = false;
+}
+
+static void *pipelines_thread_main(void *arg)
+{
+    struct afmf_device *dev = arg;
+    dev->pipelines_result = pipelines_create(dev);
+    return NULL;
+}
+
+void afmf_framegen_pipelines_prepare(struct afmf_device *dev)
+{
+    if (dev->framegen_pipelines != NULL || dev->pipelines_thread_running)
+        return;
+    dev->pipelines_thread_running =
+        pthread_create(&dev->pipelines_thread, NULL, pipelines_thread_main, dev) == 0;
+}
+
 void afmf_framegen_pipelines_destroy(struct afmf_device *dev)
 {
+    pipelines_join(dev);
     struct afmf_framegen_pipelines *p = dev->framegen_pipelines;
     if (p == NULL)
         return;
@@ -343,15 +371,17 @@ static VkResult pipelines_create(struct afmf_device *dev)
     return VK_SUCCESS;
 }
 
+/* The device's pipelines: compiled at vkCreateDevice on a thread of their own
+ * (afmf_framegen_pipelines_prepare), so the first swapchain only waits for what is left. */
 static struct afmf_framegen_pipelines *pipelines_get(struct afmf_device *dev)
 {
-    if (dev->framegen_pipelines == NULL) {
-        VkResult res = pipelines_create(dev);
-        if (res != VK_SUCCESS) {
-            AFMF_WARN("frame generation pipelines failed (VkResult %d)", (int)res);
-            afmf_framegen_pipelines_destroy(dev);
-            return NULL;
-        }
+    pipelines_join(dev);
+    if (dev->framegen_pipelines == NULL)
+        dev->pipelines_result = pipelines_create(dev);
+    if (dev->pipelines_result != VK_SUCCESS) {
+        AFMF_WARN("frame generation pipelines failed (VkResult %d)", (int)dev->pipelines_result);
+        afmf_framegen_pipelines_destroy(dev);
+        return NULL;
     }
     return dev->framegen_pipelines;
 }

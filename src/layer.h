@@ -139,7 +139,10 @@ struct afmf_device {
     pthread_mutex_t async_lock; /* the application may present from several threads */
     uint32_t *app_families;
     uint32_t app_family_count;
-    struct afmf_framegen_pipelines *framegen_pipelines; /* created on first use, freed with the device */
+    struct afmf_framegen_pipelines *framegen_pipelines; /* compiled at device creation on a thread, freed with the device */
+    pthread_t pipelines_thread;
+    bool pipelines_thread_running;
+    VkResult pipelines_result;
 
     pthread_mutex_t lock; /* guards `queues`, `swapchains` and the per-swapchain counters */
     struct afmf_queue *queues; /* every queue handed out, sized from VkDeviceCreateInfo */

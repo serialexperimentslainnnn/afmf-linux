@@ -691,6 +691,10 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
     g_devices = dev;
     pthread_mutex_unlock(&g_lock);
 
+    /* The shaders compile while the application sets itself up, not on its first present. */
+    if (dev->fns.queue_present != NULL)
+        afmf_framegen_pipelines_prepare(dev);
+
     if (dev->async_queue != VK_NULL_HANDLE && !dev->async_shared)
         AFMF_INFO("device %p created, VK_KHR_swapchain %s, layer queue on family %u (%s priority)",
                   (void *)*out, dev->fns.queue_present != NULL ? "enabled" : "not enabled",

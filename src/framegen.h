@@ -72,5 +72,7 @@ bool afmf_framegen_dump_pending(const struct afmf_framegen *fg);
 bool afmf_framegen_dump_recorded(const struct afmf_framegen *fg);
 void afmf_framegen_dump_write(struct afmf_device *dev, struct afmf_framegen *fg);
 
-/* Frees the per-device pipelines; called from vkDestroyDevice. */
+/* Compiles the per-device pipelines on a thread of their own, from vkCreateDevice; the first
+ * swapchain joins it. Frees them from vkDestroyDevice. */
+void afmf_framegen_pipelines_prepare(struct afmf_device *dev);
 void afmf_framegen_pipelines_destroy(struct afmf_device *dev);

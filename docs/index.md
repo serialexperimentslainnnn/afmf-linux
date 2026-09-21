@@ -10,7 +10,7 @@ faq:
   - q: Does it work with Proton and DirectX games?
     a: Yes. DXVK and vkd3d-proton present through Vulkan, which is where the layer sits. It has been measured with DirectX 12 titles under Proton.
   - q: Does it need an AMD GPU?
-    a: No. It needs a Vulkan 1.1 driver with compute queues and 32-bit image atomics. Tuned on RDNA4 and verified on RDNA3, both with RADV; a user reports it working on an NVIDIA GTX 1050 Ti. RDNA2 and Intel are untested.
+    a: No. It needs a Vulkan 1.1 driver with subgroup basic, arithmetic and quad operations in compute, 32-bit image atomics and r8ui/rg16i storage images; every Mesa driver has them, and a device without them gets a log line and no generation. Tuned on RDNA4 and verified on RDNA3, both with RADV; a user reports it working on an NVIDIA GTX 1050 Ti. RDNA2 and Intel are untested.
   - q: Is it a kernel module or a Mesa patch?
     a: Neither. It is a Vulkan implicit layer, installed like MangoHud, enabled per game with AFMF_ENABLE=1.
 ---

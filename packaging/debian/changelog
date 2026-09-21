@@ -1,3 +1,10 @@
+afmf-linux (1.0.1-1) unstable; urgency=medium
+
+  * Fixed: GPU hang on Intel (ANV). The block search's cross-subgroup sums and minimums now
+    combine every subgroup the driver chose instead of exactly two of 32 lanes, and the scene
+    change detector completes before the coarsest search instead of alongside it.
+
+ -- Lain <lain@digitalexperiments.dev>  Mon, 21 Sep 2026 14:00:00 +0200
 afmf-linux (1.0.0-1) unstable; urgency=medium
 
   * Quality defaults: optical flow at display resolution with all seven pyramid levels and

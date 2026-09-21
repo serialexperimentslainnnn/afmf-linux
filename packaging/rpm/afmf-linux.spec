@@ -3,7 +3,7 @@
 %global layer_dir %{_datadir}/vulkan/implicit_layer.d
 
 Name:           afmf-linux
-Version:        1.0.0
+Version:        1.0.1
 Release:        1%{?dist}
 Summary:        AMD Fluid Motion Frames for Linux: Vulkan frame generation layer
 License:        MIT
@@ -42,6 +42,10 @@ DXVK and vkd3d-proton titles under Proton. Dormant until AFMF_ENABLE=1 is set fo
 %{layer_dir}/afmf-linux.json
 
 %changelog
+* Mon Sep 21 2026 Lain <lain@digitalexperiments.dev> - 1.0.1-1
+- GPU hang on Intel (ANV): the block search's cross-subgroup reductions now combine every
+  subgroup the driver chose; the scene change detector completes before the coarsest search
+
 * Wed Sep 16 2026 Lain <lain@digitalexperiments.dev> - 1.0.0-1
 - Quality defaults (flow at display resolution, seven levels, blend) at the cost of the old
   half-resolution ones: blocks whose coarser-level vector matches skip the search; FIFO

@@ -1,6 +1,6 @@
 # Maintainer: Lain <lain@digitalexperiments.dev>
 pkgname=afmf-linux
-pkgver=1.0.0
+pkgver=1.0.1
 pkgrel=1
 pkgdesc="AMD Fluid Motion Frames for Linux: Vulkan frame generation layer for any game (Proton, DXVK, native)"
 arch=('x86_64')

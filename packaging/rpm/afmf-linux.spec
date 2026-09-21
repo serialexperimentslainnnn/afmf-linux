@@ -43,12 +43,10 @@ DXVK and vkd3d-proton titles under Proton. Dormant until AFMF_ENABLE=1 is set fo
 
 %changelog
 * Mon Sep 21 2026 Lain <lain@digitalexperiments.dev> - 1.1.0-1
-- The scene change detector's reductions are correct on 8- and 16-lane subgroups (Intel);
-  generation checks the device's subgroup operations and storage formats before starting
-
-* Mon Sep 21 2026 Lain <lain@digitalexperiments.dev> - 1.0.1-1
 - GPU hang on Intel (ANV): the block search's cross-subgroup reductions now combine every
   subgroup the driver chose; the scene change detector completes before the coarsest search
+  and its own reductions are correct on 8- and 16-lane subgroups; generation checks the
+  device's subgroup operations and storage formats before starting
 
 * Wed Sep 16 2026 Lain <lain@digitalexperiments.dev> - 1.0.0-1
 - Quality defaults (flow at display resolution, seven levels, blend) at the cost of the old

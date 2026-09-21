@@ -9,6 +9,13 @@ All notable changes to afmf-linux are documented here. The format follows
 ## [1.1.0] - 2026-09-21
 
 ### Fixed
+- GPU hang on Intel (ANV): the block search's cross-subgroup sums and minimums assumed two
+  subgroups of 32 lanes, so on the 8- or 16-lane subgroups ANV picks the early-outs differed
+  between subgroups and the group split at its next barrier. They now combine however many
+  subgroups the driver chose, through shared memory indexed by subgroup id; the same on RADV.
+- The scene change detector's divergence pass runs before the coarsest search again instead
+  of alongside it: that search returns early on a cut, and reading the verdict while it was
+  being written could split a group the same way.
 - The scene change detector's shared-memory reductions ran their last six steps without
   barriers, which only holds when the first 32 lanes are one subgroup; on Intel's 8- and
   16-lane subgroups a lane could read a partial sum before it was written, so the detector's
@@ -17,17 +24,6 @@ All notable changes to afmf-linux are documented here. The format follows
   subgroup basic, arithmetic and quad operations in compute, and storage support for the
   `r8ui` luma and `rg16i` flow images; a device without them gets a log line and repeated
   frames. The device line at debug level shows the subgroup size and operations.
-
-## [1.0.1] - 2026-09-21
-
-### Fixed
-- GPU hang on Intel (ANV): the block search's cross-subgroup sums and minimums assumed two
-  subgroups of 32 lanes, so on the 8- or 16-lane subgroups ANV picks the early-outs differed
-  between subgroups and the group split at its next barrier. They now combine however many
-  subgroups the driver chose, through shared memory indexed by subgroup id; the same on RADV.
-- The scene change detector's divergence pass runs before the coarsest search again instead
-  of alongside it: that search returns early on a cut, and reading the verdict while it was
-  being written could split a group the same way.
 
 ## [1.0.0] - 2026-09-16
 
@@ -177,7 +173,6 @@ First public release.
 
 [Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.1.0
-[1.0.1]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.0.1
 [1.0.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.0.0
 [0.4.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.4.0
 [0.3.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.3.0

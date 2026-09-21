@@ -21,7 +21,9 @@ Local edits, every line of them marked `afmf-linux:`:
   predicted by the coarser level (zero at the coarsest) is taken before the search, and a block at
   or under the specialization constant `afmfStaticBlockSad` (`AFMF_STATIC_BLOCK_SAD`, 0 = the
   SDK's behaviour) keeps that vector and skips the search; the SDK's level-0 zero-vector
-  fallback only computes its sum at level 0.
+  fallback only computes its sum at level 0. The cross-subgroup sum and minimum combine
+  `gl_NumSubgroups` partials through shared memory instead of exactly two of 32 lanes, so the
+  result is uniform across the group on every subgroup size (ANV picks 8 or 16).
 - `opticalflow/ffx_opticalflow_common.h`, `..._v5.h` and
   `passes/ffx_opticalflow_compute_optical_flow_advanced_pass_v5.glsl`: with `AFMF_SAD_INT16=1`
   (a second build of the search pass, used on devices with `shaderInt16`) the SAD runs on packed

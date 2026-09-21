@@ -33,7 +33,7 @@ enum stage {
     STAGE_INGEST,
     STAGE_PREPARE,
     STAGE_PYRAMID, /* the luma pyramid and the scene change detector's histogram, side by side */
-    STAGE_SEARCH,  /* includes the detector's divergence pass, which overlaps the coarsest search */
+    STAGE_SEARCH,  /* includes the detector's divergence pass, in front of the coarsest search */
     STAGE_FILTER,
     STAGE_SCALE,
     STAGE_INTERPOLATE,
@@ -1708,14 +1708,12 @@ static void record_flow(struct afmf_device *dev, struct afmf_framegen *fg, VkCom
              AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM);
     profiler_mark(dev, fg, cmd, slot, STAGE_PYRAMID);
 
-    /* The detector's divergence (nine groups) runs alongside the coarsest search instead of in
-     * front of it: that search reads the detector's output without waiting for it, so on a cut
-     * frame its vectors are whatever they are, and every level after it, which does wait, and
-     * the interpolator store zeros as before. Off a cut both values say the same. */
-    dispatch_pass(dev, cmd, pl->pipelines[PASS_SCD_DIVERGENCE], pl->layouts[PASS_SCD_DIVERGENCE],
-                  fg->sets[p][SET_SCD_DIVERGENCE], &of0, 1,
-                  AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM, AFMF_HISTOGRAM_SHIFTS, 1,
-                  !companion);
+    /* The detector's divergence (nine groups) completes before the coarsest search: that
+     * search returns early on a cut, and a group whose lanes read the verdict while the
+     * detector was still writing it would split at its next barrier (a GPU hang on Intel). */
+    dispatch(dev, cmd, pl->pipelines[PASS_SCD_DIVERGENCE], pl->layouts[PASS_SCD_DIVERGENCE],
+             fg->sets[p][SET_SCD_DIVERGENCE], &of0, 1,
+             AFMF_HISTOGRAMS_PER_DIM * AFMF_HISTOGRAMS_PER_DIM, AFMF_HISTOGRAM_SHIFTS, 1);
 
     for (uint32_t k = companion ? levels : 0; k-- > 0;) {
         uint32_t ofk = cb_offset(fg, slot, k);

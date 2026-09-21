@@ -39,9 +39,22 @@ FFX_GROUPSHARED FfxUInt32 searchBuffer[1][SearchBufferSizeY * SearchBufferSizeX]
 #define bankBreaker 1
 FFX_GROUPSHARED FfxUInt32 sadMapBuffer[4][SearchRadiusY * 2][(SearchRadiusX * 2) / 4 + bankBreaker];
 
-#define MaxWaves 2
+// afmf-linux: the group's ThreadCount lanes form however many subgroups the driver chose (one
+// of 64 or two of 32 on RADV; up to eight of 8 on ANV), and the cross-subgroup step goes
+// through shared memory indexed by the subgroup id, so every lane of the group ends with the
+// same sum or minimum. The SDK combined exactly two subgroups of 32: with smaller ones the
+// result differed between subgroups, the early-outs below split the group, and the next
+// barrier waited forever (a GPU hang on Intel).
+#define MaxWaves ThreadCount
 FFX_GROUPSHARED FfxUInt32 sWaveSad[MaxWaves];
 FFX_GROUPSHARED FfxUInt32 sWaveMin[MaxWaves];
+#if defined(FFX_GLSL)
+#define AfmfWaveCount() gl_NumSubgroups
+#define AfmfWaveId() gl_SubgroupID
+#else
+#define AfmfWaveCount() (FfxUInt32(ThreadCount) / ffxWaveLaneCount())
+#define AfmfWaveId() (FfxUInt32(iLocalIndex) / ffxWaveLaneCount())
+#endif
 
 // afmf-linux: a block whose 64 pixels differ from the previous frame's at the predicted vector
 // (zero at the coarsest level, the coarser level's result below it) by no more than this (sum of
@@ -61,15 +74,18 @@ FfxUInt32 BlockSad64(FfxUInt32 blockSadSum, FfxInt32 iLocalIndex, FfxInt32 iLane
     }
     blockSadSum = ffxWaveSum(blockSadSum);
 
-    if (ffxWaveLaneCount() == 32)
+    if (AfmfWaveCount() > 1u)
     {
-        FfxInt32 waveId = iLocalIndex >> 5u;
         if (ffxWaveIsFirstLane())
         {
-            sWaveSad[waveId] = blockSadSum;
+            sWaveSad[AfmfWaveId()] = blockSadSum;
         }
         FFX_GROUP_MEMORY_BARRIER;
-        blockSadSum += sWaveSad[waveId ^ 1];
+        blockSadSum = 0u;
+        for (FfxUInt32 w = 0u; w < AfmfWaveCount(); w++)
+        {
+            blockSadSum += sWaveSad[w];
+        }
     }
 
     return blockSadSum;
@@ -82,16 +98,17 @@ FfxUInt32 SadMapMinReduction256(FfxInt32x2 iSearchId, FfxInt32 iLocalIndex)
     FfxUInt32 min0123 = ffxMin(min01, min23);
     min0123 = ffxWaveMin(min0123);
 
-    if (ffxWaveLaneCount() == 32)
+    if (AfmfWaveCount() > 1u)
     {
-        FfxInt32 waveId = iLocalIndex >> 5u;
-
         if (ffxWaveIsFirstLane())
         {
-            sWaveMin[waveId] = min0123;
+            sWaveMin[AfmfWaveId()] = min0123;
         }
         FFX_GROUP_MEMORY_BARRIER;
-        min0123 = ffxMin(min0123, sWaveMin[waveId ^ 1]);
+        for (FfxUInt32 w = 0u; w < AfmfWaveCount(); w++)
+        {
+            min0123 = ffxMin(min0123, sWaveMin[w]);
+        }
     }
 
     return min0123;

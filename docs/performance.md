@@ -21,7 +21,7 @@ clocks; a game runs it faster):
 |---|---|
 | Ingest (one read of the game's frame into the colour ring and the luma) | 144-166 &micro;s |
 | Pyramid and scene-change detector histogram, side by side | 46-54 &micro;s |
-| Block search (FidelityFX Optical Flow, 7 levels; packed 16-bit SAD; blocks whose coarser-level vector already matches skip it; the detector's divergence overlaps the coarsest level) | 267-282 &micro;s |
+| Block search (FidelityFX Optical Flow, 7 levels; packed 16-bit SAD; blocks whose coarser-level vector already matches skip it) | 267-282 &micro;s |
 | Filter and scale | 112-119 &micro;s |
 | Interpolation | 65-81 &micro;s |
 | Output copy | 44-59 &micro;s (0 with `AFMF_DIRECT_OUTPUT=1`) |
@@ -58,7 +58,8 @@ without validation.
 | Work thread: the hook only queues the frame | hook 120-175 &rarr; 11 &micro;s (headless, validation layer on) |
 | Flow and interpolation pre-recorded into secondary command buffers | recording in the hook 170-190 &rarr; 80-117 &micro;s (headless, validation layer on) |
 | Direct output into the swapchain image (`AFMF_DIRECT_OUTPUT=1`, opt-in) | output copy 9-17 &micro;s &rarr; 0 on the GPU; the interpolate dispatch moves to the per-frame primary (+10-20 &micro;s of recording under validation); what storage usage costs the game's own rendering is per game and not measured here |
-| Fused ingest (`AFMF_DIRECT_INGEST`), detector alongside the pyramid and the coarsest search, four predictions checked at once | one read of the game's frame instead of a copy plus a luma read; the detector's two passes fill the pyramid's and the coarse levels' idle time instead of adding their own; fewer barriers per group in the search |
+| Fused ingest (`AFMF_DIRECT_INGEST`), detector's histogram alongside the pyramid, four predictions checked at once | one read of the game's frame instead of a copy plus a luma read; the histogram fills the pyramid's idle time instead of adding its own; fewer barriers per group in the search |
+| Measured and rejected: the detector's divergence overlapping the coarsest search | that search returns early on a cut, so a group reading the verdict while it was being written split at its next barrier and hung Intel GPUs; the pass runs in front of the search again |
 | Measured and rejected: refining a nearly matching prediction over +-4 (64 candidates, one per lane) instead of searching +-8 | the coarse levels' vectors came out a pixel off, the fine levels stopped skipping their search, and the search went from 274 to 706 &micro;s |
 | Packed 16-bit SAD in the search (`AFMF_SAD_INT16`) | the sum of absolute differences on byte pairs, two per instruction, instead of shift-mask-subtract-abs per byte: about a third of the ALU work per candidate |
 | Static blocks skip the search (`AFMF_STATIC_BLOCK_SAD`) | search 307 &rarr; 117 &micro;s at half resolution, 513 &rarr; 156 at full, on the headless test's mostly still picture; a game's share of still blocks decides its gain |
@@ -78,8 +79,8 @@ presentation thread presents the generated frame, holds the real one back half a
 presents it, then acquires the next spare. The pipelines compile on a fourth thread from device
 creation. On the GPU, everything runs on one compute queue of the layer's own: within a frame
 the passes form a dependency chain (ingest, pyramid, search level by level, filter, scale,
-interpolation), and only the scene change detector is independent, so it runs alongside the
-pyramid and the coarsest search with no barrier of its own. A second queue would overlap one frame's interpolation with the next frame's ingest, but
+interpolation), and only the scene change detector's histogram is independent, so it runs alongside the
+pyramid with no barrier of its own. A second queue would overlap one frame's interpolation with the next frame's ingest, but
 the next frame arrives milliseconds later and the layer's whole frame takes under one: the two
 would never coincide. On a GPU the game keeps at 100 %, what the layer costs is the sum of its
 dispatches, and that is what the table above measures.

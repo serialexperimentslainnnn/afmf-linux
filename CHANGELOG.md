@@ -6,6 +6,18 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-21
+
+### Fixed
+- The scene change detector's shared-memory reductions ran their last six steps without
+  barriers, which only holds when the first 32 lanes are one subgroup; on Intel's 8- and
+  16-lane subgroups a lane could read a partial sum before it was written, so the detector's
+  value was wrong. Every step now has a barrier.
+- Generation checks what the flow shaders need before starting instead of failing inside them:
+  subgroup basic, arithmetic and quad operations in compute, and storage support for the
+  `r8ui` luma and `rg16i` flow images; a device without them gets a log line and repeated
+  frames. The device line at debug level shows the subgroup size and operations.
+
 ## [1.0.1] - 2026-09-21
 
 ### Fixed
@@ -163,7 +175,8 @@ First public release.
 - Headless integration test under the Khronos validation layer, vkcube smoke test, sanitizer
   build, GCC `-fanalyzer` and ShellCheck gates.
 
-[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.1.0
 [1.0.1]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.0.1
 [1.0.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.0.0
 [0.4.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.4.0

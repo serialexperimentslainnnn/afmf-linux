@@ -1,3 +1,12 @@
+afmf-linux (1.1.0-1) unstable; urgency=medium
+
+  * Fixed: the scene change detector's shared-memory reductions ran their last steps without
+    barriers, which only holds on subgroups of 32 lanes or more; on Intel's 8- and 16-lane
+    subgroups the result was wrong. Generation now checks the device's subgroup operations
+    (basic, arithmetic, quad in compute) and the r8ui/rg16i storage formats before starting.
+
+ -- Lain <lain@digitalexperiments.dev>  Mon, 21 Sep 2026 20:00:00 +0200
+
 afmf-linux (1.0.1-1) unstable; urgency=medium
 
   * Fixed: GPU hang on Intel (ANV). The block search's cross-subgroup sums and minimums now

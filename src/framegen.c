@@ -1421,9 +1421,17 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
         fg->levels = AFMF_LEVELS;
     fg->max_levels = fg->levels;
 
+    /* What the flow shaders use: subgroupElect and the ids (basic), subgroupAdd and
+     * subgroupMin (arithmetic), the pyramid's quad swaps (quad); all in compute. */
+    const VkSubgroupFeatureFlags subgroup_ops = VK_SUBGROUP_FEATURE_BASIC_BIT |
+                                                VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+                                                VK_SUBGROUP_FEATURE_QUAD_BIT;
     const char *blocker = NULL;
     if (dev->api_version < VK_API_VERSION_1_1)
         blocker = "application uses Vulkan 1.0; the flow shaders need 1.1 subgroups";
+    else if ((dev->subgroup.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) == 0 ||
+             (dev->subgroup.supportedOperations & subgroup_ops) != subgroup_ops)
+        blocker = "device lacks subgroup basic, arithmetic and quad operations in compute";
     else if (!describe_format(swapchain_format, fg))
         blocker = "swapchain format has no interpolation variant";
     else if (extent.width < AFMF_MIN_EXTENT || extent.height < AFMF_MIN_EXTENT)
@@ -1436,6 +1444,9 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
         blocker = "device lacks storage for the half-resolution colour";
     else if (!format_supports(dev, VK_FORMAT_R32_UINT, VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT))
         blocker = "device lacks r32ui image atomics";
+    else if (!format_supports(dev, VK_FORMAT_R8_UINT, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) ||
+             !format_supports(dev, VK_FORMAT_R16G16_SINT, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT))
+        blocker = "device lacks r8ui or rg16i storage images (shaderStorageImageExtendedFormats)";
     else if (pipelines_get(dev) == NULL)
         blocker = "pipelines unavailable";
 

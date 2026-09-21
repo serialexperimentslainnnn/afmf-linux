@@ -88,11 +88,20 @@ void ComputeSCDHistogramsDivergence(FfxInt32x3 iGlobalId, FfxInt32x2 iLocalId, F
     if (iLocalIndex < 64) tempBuffer[iLocalIndex] += tempBuffer[iLocalIndex + 64];
     FFX_GROUP_MEMORY_BARRIER;
 
+    // afmf-linux: the SDK ran the last six steps without barriers, which holds only when the
+    // first 32 lanes are one subgroup in lockstep (RADV, NVIDIA); on 8- or 16-lane subgroups
+    // (ANV) a lane read a partial sum another subgroup had not written yet. One barrier per
+    // step, on every driver: the pass is 27 groups, the cost is nothing.
     if (iLocalIndex < 32) tempBuffer[iLocalIndex] += tempBuffer[iLocalIndex + 32];
+    FFX_GROUP_MEMORY_BARRIER;
     if (iLocalIndex < 16) tempBuffer[iLocalIndex] += tempBuffer[iLocalIndex + 16];
+    FFX_GROUP_MEMORY_BARRIER;
     if (iLocalIndex < 8 ) tempBuffer[iLocalIndex] += tempBuffer[iLocalIndex + 8];
+    FFX_GROUP_MEMORY_BARRIER;
     if (iLocalIndex < 4 ) tempBuffer[iLocalIndex] += tempBuffer[iLocalIndex + 4];
+    FFX_GROUP_MEMORY_BARRIER;
     if (iLocalIndex < 2 ) tempBuffer[iLocalIndex] += tempBuffer[iLocalIndex + 2];
+    FFX_GROUP_MEMORY_BARRIER;
     if (iLocalIndex < 1 ) tempBuffer[iLocalIndex] += tempBuffer[iLocalIndex + 1];
     FFX_GROUP_MEMORY_BARRIER;
 
@@ -113,11 +122,17 @@ void ComputeSCDHistogramsDivergence(FfxInt32x3 iGlobalId, FfxInt32x2 iLocalId, F
     if (iLocalIndex < 64) tempBuffer2[iLocalIndex] += tempBuffer2[iLocalIndex + 64];
     FFX_GROUP_MEMORY_BARRIER;
 
+    // afmf-linux: same as above.
     if (iLocalIndex < 32) tempBuffer2[iLocalIndex] += tempBuffer2[iLocalIndex + 32];
+    FFX_GROUP_MEMORY_BARRIER;
     if (iLocalIndex < 16) tempBuffer2[iLocalIndex] += tempBuffer2[iLocalIndex + 16];
+    FFX_GROUP_MEMORY_BARRIER;
     if (iLocalIndex < 8 ) tempBuffer2[iLocalIndex] += tempBuffer2[iLocalIndex + 8];
+    FFX_GROUP_MEMORY_BARRIER;
     if (iLocalIndex < 4 ) tempBuffer2[iLocalIndex] += tempBuffer2[iLocalIndex + 4];
+    FFX_GROUP_MEMORY_BARRIER;
     if (iLocalIndex < 2 ) tempBuffer2[iLocalIndex] += tempBuffer2[iLocalIndex + 2];
+    FFX_GROUP_MEMORY_BARRIER;
 
     if (iLocalIndex == 0)
     {

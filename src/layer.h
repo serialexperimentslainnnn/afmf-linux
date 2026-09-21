@@ -114,6 +114,9 @@ struct afmf_device {
 
     VkPhysicalDeviceMemoryProperties memory_properties;
     VkPhysicalDeviceLimits limits;
+    /* Vulkan 1.1 subgroup properties (zero when the instance is 1.0 and cannot ask): the flow
+     * shaders need basic, arithmetic and quad operations in compute; the size is logged. */
+    VkPhysicalDeviceSubgroupProperties subgroup;
     VkQueueFamilyProperties *queue_families;
     uint32_t queue_family_count;
 

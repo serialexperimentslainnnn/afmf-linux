@@ -24,6 +24,9 @@ Local edits, every line of them marked `afmf-linux:`:
   fallback only computes its sum at level 0. The cross-subgroup sum and minimum combine
   `gl_NumSubgroups` partials through shared memory instead of exactly two of 32 lanes, so the
   result is uniform across the group on every subgroup size (ANV picks 8 or 16).
+- `opticalflow/ffx_opticalflow_compute_scd_divergence.h`: the last six steps of the two
+  shared-memory reductions have a group barrier each; the SDK ran them without one, which only
+  holds when the first 32 lanes are a single subgroup.
 - `opticalflow/ffx_opticalflow_common.h`, `..._v5.h` and
   `passes/ffx_opticalflow_compute_optical_flow_advanced_pass_v5.glsl`: with `AFMF_SAD_INT16=1`
   (a second build of the search pass, used on devices with `shaderInt16`) the SAD runs on packed

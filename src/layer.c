@@ -35,6 +35,7 @@ struct afmf_instance {
     PFN_vkGetPhysicalDeviceMemoryProperties get_memory_properties;
     PFN_vkGetPhysicalDeviceQueueFamilyProperties get_queue_family_properties;
     PFN_vkGetPhysicalDeviceProperties get_properties;
+    PFN_vkGetPhysicalDeviceProperties2 get_properties2; /* NULL on a 1.0 instance */
     PFN_vkGetPhysicalDeviceFeatures get_features;
     PFN_vkEnumerateDeviceExtensionProperties enumerate_device_extensions;
     struct afmf_instance *next;
@@ -357,6 +358,10 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateInstance(const VkInstanceCreate
     inst->get_memory_properties = get_memory;
     inst->get_queue_family_properties = get_families;
     inst->get_properties = get_properties;
+    inst->get_properties2 = inst->api_version >= VK_API_VERSION_1_1
+                                ? (PFN_vkGetPhysicalDeviceProperties2)next_gipa(
+                                      *out, "vkGetPhysicalDeviceProperties2")
+                                : NULL;
     inst->get_features = get_features;
     inst->enumerate_device_extensions = enumerate_extensions;
 
@@ -534,6 +539,15 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
     dev->limits = properties.limits;
     dev->api_version = properties.apiVersion < inst->api_version ? properties.apiVersion
                                                                  : inst->api_version;
+    dev->subgroup.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+    if (inst->get_properties2 != NULL && dev->api_version >= VK_API_VERSION_1_1) {
+        VkPhysicalDeviceProperties2 properties2 = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+            .pNext = &dev->subgroup,
+        };
+        inst->get_properties2(physical_device, &properties2);
+        dev->subgroup.pNext = NULL;
+    }
     inst->get_memory_properties(physical_device, &dev->memory_properties);
     inst->get_queue_family_properties(physical_device, &dev->queue_family_count, NULL);
     dev->queue_families = calloc(dev->queue_family_count, sizeof *dev->queue_families);
@@ -712,6 +726,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
         AFMF_DEBUG("device %p: application asked for %u queue(s) in family %u", (void *)*out,
                    info->pQueueCreateInfos[i].queueCount,
                    info->pQueueCreateInfos[i].queueFamilyIndex);
+    AFMF_DEBUG("device %p: %s, subgroups of %u lanes (operations 0x%x in stages 0x%x)",
+               (void *)*out, properties.deviceName, dev->subgroup.subgroupSize,
+               dev->subgroup.supportedOperations, dev->subgroup.supportedStages);
     return VK_SUCCESS;
 }
 

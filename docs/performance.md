@@ -25,51 +25,34 @@ clocks; a game runs it faster):
 | Filter and scale | 112-119 &micro;s |
 | Interpolation | 65-81 &micro;s |
 | Output copy | 44-59 &micro;s (0 with `AFMF_DIRECT_OUTPUT=1`) |
-| **Total** | **700-760 &micro;s** (previous release, same run: 825-937) |
+| **Total** | **700-760 &micro;s** |
 
-The previous release's default (flow at half resolution, five levels) costs 825-937 &micro;s on
-the same run (ingest copy 166-209 plus a luma pass of 57, pyramid and detector in series, search
-386-410): the full-resolution search with all seven levels now costs less than the
-half-resolution one did, because the sum of absolute differences runs on packed 16-bit pairs
-(`AFMF_SAD_INT16`: the search went from 410 to 274 &micro;s) and a block whose vector from the
-coarser level already matches keeps it instead of searching 256 candidates again
-(`AFMF_STATIC_BLOCK_SAD`; without it the same search takes 1.5 ms). On the
-headless test's still picture the whole frame is 370-430 &micro;s. All of it runs on a compute
-queue of the layer's own (or the game's last compute queue when the game took them all, as
-vkd3d-proton does), so it competes for the GPU but never sits in the game's queue.
+What keeps the full-resolution search with all seven levels at that cost: the sum of absolute
+differences runs on packed 16-bit pairs (`AFMF_SAD_INT16`, about a third of the ALU work per
+candidate; the search takes 410 &micro;s without it) and a block whose vector from the coarser
+level already matches keeps it instead of searching 256 candidates again
+(`AFMF_STATIC_BLOCK_SAD`; without it the same search takes 1.5 ms, and a game's share of still
+blocks decides its gain). On the headless test's still picture the whole frame is 367-424
+&micro;s, and 409-432 with the flow at half resolution (`AFMF_PERFORMANCE_MODE=performance`),
+whose coarser blocks skip fewer searches. All of it runs on a compute queue of the layer's own (or the game's last compute
+queue when the game took them all, as vkd3d-proton does), so it competes for the GPU but never
+sits in the game's queue.
 
 Host, on the game's thread, per present: **11 &micro;s under the validation layer** in the
 headless test: the hook only consumes the game's semaphores and queues the frame. The slot's
 fence, the spare image, recording and the submission (150-200 &micro;s together) run on the
-layer's work thread, the two presents and the pacing hold on its presentation thread. The
-previous release spent 278-284 &micro;s on the game's thread on the same run, and 76-91 in a game
-without validation.
+layer's work thread, the two presents and the pacing hold on its presentation thread.
 
-## How the numbers were reached
+## Measured and rejected
 
-| Change | Effect |
+| Idea | Why not |
 |---|---|
-| Baseline, everything on the game's queue at full resolution | 1222 &micro;s GPU, in series with rendering |
-| Optical flow at half resolution | 493 &micro;s |
-| 5 pyramid levels at half resolution, compute-only barriers | 434 &micro;s |
-| Companion image acquired a frame ahead instead of waited for | host time in the present hook 5.9 ms &rarr; 60 &micro;s (FIFO desktop) |
-| Shared compute queue when the game holds every compute queue | GPU work off the graphics queue in vkd3d-proton titles |
-| Presentation thread with half-frame pacing | hook 546 &rarr; 80 &micro;s in game; generated frames evenly spaced |
-| Work thread: the hook only queues the frame | hook 120-175 &rarr; 11 &micro;s (headless, validation layer on) |
-| Flow and interpolation pre-recorded into secondary command buffers | recording in the hook 170-190 &rarr; 80-117 &micro;s (headless, validation layer on) |
-| Direct output into the swapchain image (`AFMF_DIRECT_OUTPUT=1`, opt-in) | output copy 9-17 &micro;s &rarr; 0 on the GPU; the interpolate dispatch moves to the per-frame primary (+10-20 &micro;s of recording under validation); what storage usage costs the game's own rendering is per game and not measured here |
-| Fused ingest (`AFMF_DIRECT_INGEST`), detector's histogram alongside the pyramid, four predictions checked at once | one read of the game's frame instead of a copy plus a luma read; the histogram fills the pyramid's idle time instead of adding its own; fewer barriers per group in the search |
-| Measured and rejected: the detector's divergence overlapping the coarsest search | that search returns early on a cut, so a group reading the verdict while it was being written split at its next barrier and hung Intel GPUs; the pass runs in front of the search again |
-| Measured and rejected: refining a nearly matching prediction over +-4 (64 candidates, one per lane) instead of searching +-8 | the coarse levels' vectors came out a pixel off, the fine levels stopped skipping their search, and the search went from 274 to 706 &micro;s |
-| Packed 16-bit SAD in the search (`AFMF_SAD_INT16`) | the sum of absolute differences on byte pairs, two per instruction, instead of shift-mask-subtract-abs per byte: about a third of the ALU work per candidate |
-| Static blocks skip the search (`AFMF_STATIC_BLOCK_SAD`) | search 307 &rarr; 117 &micro;s at half resolution, 513 &rarr; 156 at full, on the headless test's mostly still picture; a game's share of still blocks decides its gain |
-
-Against the previous release, same binary and method (3440&times;1440, unpaced headless run, three
-runs each): on the still picture, host time in the present hook 233-275 &rarr; 102-149 &micro;s
-(the spare's release fence is waited on outside the swapchain lock, recording is pre-recorded),
-GPU per generated frame 584 &rarr; 409-432 &micro;s at half resolution and 1123-1141 &rarr; 367-424 at
-full; on the full-frame pan, 825-840 &micro;s with the old default against 700-760 with the new
-one at four times the blocks and seven levels.
+| The detector's divergence overlapping the coarsest search | that search returns early on a cut, so a group reading the verdict while it was being written split at its next barrier and hung Intel GPUs; the pass runs in front of the search |
+| Refining a nearly matching prediction over +-4 (64 candidates, one per lane) instead of searching +-8 | the coarse levels' vectors came out a pixel off, the fine levels stopped skipping their search, and the search went from 274 to 706 &micro;s |
+| A second compute queue | see below: the layer's frame is over before the next one arrives |
+| wave32 compute | no gain |
+| Native SAD instructions | unreachable from GLSL |
+| Direct output as the default | it needs storage usage on the game's swapchain images, which can cost the game more than the 44-59 &micro;s copy it saves; it stays opt-in (`AFMF_DIRECT_OUTPUT=1`) |
 
 ## Threads and queues
 
@@ -91,31 +74,28 @@ Two things learned from the screenshots' games that are worth more than a number
 makes RADV crash while compiling DOOM's ray tracing pipelines. Both are per-game choices, not
 defaults.
 
-Measured and rejected: wave32 compute (no gain), native SAD instructions (unreachable from GLSL),
-writing the interpolator straight into the swapchain image (needs `STORAGE` usage on the game's
-images, which can cost the game more than the 33 &micro;s copy it saves).
-
 ## In games
 
 | Game | Base (Linux, `DISABLE_AFMF=1`) | With afmf-linux | Notes |
 |---|---|---|---|
-| Monster Hunter Wilds, Native AA, max, vkd3d-proton | 120 fps | 250 moving / 271 still | 26,380 of 26,381 presents got a companion; hook 76-91 &micro;s; hold 3.7-4.3 ms |
+| Monster Hunter Wilds, Native AA, max, vkd3d-proton | 120 fps | 250 moving / 271 still | 26,380 of 26,381 presents got a companion; hold 3.7-4.3 ms |
 | Cyberpunk 2077, RT Ultra, FSR 4 Quality, game FG on (needed), vkd3d-proton | ~100-125 fps | 180-250 | `RADV_PERFTEST=rtcps` raised the base; the gap to Windows is RADV's ray tracing, not the layer |
-| DOOM: The Dark Ages, Ultra Nightmare, FSR Quality, **native Vulkan** (id Tech 8) | | 268 | The first native Vulkan title through the layer; 12,900 presents in the menu all got a companion, hook 44 &micro;s. Note: `RADV_PERFTEST=rtcps` crashes this game inside RADV's ray tracing pipeline compiler; leave it out here |
+| DOOM: The Dark Ages, Ultra Nightmare, FSR Quality, **native Vulkan** (id Tech 8) | | 268 | The first native Vulkan title through the layer; 12,900 presents in the menu all got a companion. Note: `RADV_PERFTEST=rtcps` crashes this game inside RADV's ray tracing pipeline compiler; leave it out here |
 | DOOM: The Dark Ages, Ultra Nightmare, Native AA + VRS | | 255 | |
 | Overwatch 2, Epic, FidelityFX Quality, Reduced Buffering, DXVK | 223 fps (game's counter) | 449 | The highest base so far; the layer keeps up at 223 presents per second from the game |
 | Borderlands 4, Badass, FSR Quality, vkd3d-proton | ~60 fps | 125 | Unreal Engine 5 is heavy under vkd3d-proton; the layer doubles what it gets |
-| Cyberpunk 2077, same settings, **RX 7800 XT (RDNA3)**, FSR 4 in FP16 | ~60-110 fps | ~120-220 | 15,330 of 15,332 generated; hook 60-90 &micro;s; hold 4.6-7.6 ms. GPU cost 1,245 &micro;s per frame (search 700, ingest copy 148, interpolate 120, output copy 99): about 11 % of the GPU at 90 fps, against 5 % on the 9070 XT |
+| Cyberpunk 2077, same settings, **RX 7800 XT (RDNA3)**, FSR 4 in FP16 | ~60-110 fps | ~120-220 | 15,330 of 15,332 generated; hold 4.6-7.6 ms. GPU cost 1,245 &micro;s per frame with the flow at half resolution: about 11 % of the GPU at 90 fps |
 
 ## RDNA3 (RX 7800 XT)
 
 Same code, same tests (validation, golden check in both modes, sanitizers), same behaviour in
 vkcube and in a game. What differs is the cost: at 3440&times;1440 with the flow at half
-resolution, **1,070 &micro;s** per frame in the headless test and **1,245 &micro;s** in game (7
-pyramid levels with `AFMF_SEARCH_MODE=high`), against 434 on the RX 9070 XT. The copies in and
-out of the swapchain weigh much more than on RDNA4 (148 + 99 &micro;s against 47 + 33). Use
-`AFMF_SEARCH_MODE=auto` (5 levels, about 90 &micro;s less) on this generation, and expect the 2&times;
-to fall short sooner when the game saturates the GPU.
+resolution (`AFMF_PERFORMANCE_MODE=performance`), **1,070 &micro;s** per frame in the headless
+test and **1,245 &micro;s** in game with seven pyramid levels, about three times the RX 9070 XT.
+The reads and writes of the swapchain images weigh much more than on RDNA4. Use
+`AFMF_PERFORMANCE_MODE=performance` and `AFMF_SEARCH_MODE=auto` (5 levels, about 90 &micro;s
+less) on this generation, and expect the 2&times; to fall short sooner when the game saturates
+the GPU.
 
 ## Not compatible with other frame generation layers or injectors
 
@@ -127,7 +107,7 @@ afmf-linux either. Two things generating frames on the same swapchain cannot bot
 which present is which: run one or the other.
 
 The rule that decides what you will see: the ceiling is **2&times; the base**, minus GPU
-contention when the game already saturates the GPU. A fixed cost of ~0.5 ms per frame weighs more
+contention when the game already saturates the GPU. A fixed cost of ~0.7 ms per frame weighs more
 the higher the base is.
 
 ## Measure it yourself

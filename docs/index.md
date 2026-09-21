@@ -27,8 +27,8 @@ Any game, Proton or native. No kernel module, no driver patch.</p>
 
 <div class="numbers">
   <div><strong>2&times;</strong><span>frames on screen: one generated for every real frame</span></div>
-  <div><strong>0.43 ms</strong><span>GPU time per frame at 3440&times;1440 on an RX 9070 XT, off the game's queue</span></div>
-  <div><strong>~80 &micro;s</strong><span>of the game's thread per frame; the rest runs on the layer's own thread</span></div>
+  <div><strong>0.7 ms</strong><span>GPU time per frame at 3440&times;1440 on an RX 9070 XT, flow at full resolution, off the game's queue</span></div>
+  <div><strong>~10 &micro;s</strong><span>of the game's thread per frame; the rest runs on the layer's own threads</span></div>
   <div><strong>1:1</strong><span>pacing: each generated frame lands halfway between two real ones, as with AMD's AFMF</span></div>
 </div>
 
@@ -41,8 +41,9 @@ at present time, for any game, from the colour buffer alone. afmf-linux does the
 2. On every present it runs **FidelityFX Optical Flow** (AMD's own shaders, vendored under MIT)
    between the previous frame and the new one, and synthesises the frame in between.
 3. A presentation thread of the layer shows the generated frame at once and the real frame half a
-   frame later, so both land evenly spaced. The game's own thread returns as soon as the work is
-   submitted; the GPU work runs on a compute queue of the layer's own.
+   frame later, so both land evenly spaced. The game's own thread only queues the frame; a work
+   thread of the layer records and submits, and the GPU work runs on a compute queue of the
+   layer's own.
 
 It works with **DirectX games under Proton** (DXVK, vkd3d-proton) and native Vulkan titles, on
 **RADV / AMD RDNA** GPUs and, in principle, any Vulkan 1.1 driver.
@@ -94,7 +95,7 @@ Every capture with its graphics settings and the exact launch options: [screensh
 </div>
 
 The ceiling is 2&times; the base the game reaches on Linux without the layer; the layer costs
-0.43 ms of GPU time per frame and about 80 &micro;s of the game's thread. Details, per-stage numbers
+0.7 ms of GPU time per frame and about 10 &micro;s of the game's thread. Details, per-stage numbers
 and how they were measured: [performance]({{ '/performance/' | relative_url }}).
 
 ## FAQ

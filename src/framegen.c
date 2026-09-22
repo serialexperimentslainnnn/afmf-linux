@@ -15,9 +15,11 @@
 #include "config.h"
 #include "log.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #define AFMF_FLOW_BLOCK 8u
 #define AFMF_DUMP_FRAMES 4u
@@ -812,8 +814,18 @@ static VkResult resources_create(struct afmf_device *dev, struct afmf_framegen *
 static void dump_buffer_create(struct afmf_device *dev, struct afmf_framegen *fg)
 {
     bool eight_bit = fg->variant == VARIANT_RGBA8 || fg->variant == VARIANT_RGBA8_BGRA;
-    if (afmf_config_get()->dump_dir == NULL || !eight_bit)
+    const char *dir = afmf_config_get()->dump_dir;
+    if (dir == NULL || !eight_bit)
         return;
+
+    /* The directory is the user's to name, not to create: a dump that writes nothing because the
+     * path does not exist yet is a diagnosis lost. Only the last component, as mkdir -p would
+     * not: a typo in the middle of the path should still be an error. */
+    if (mkdir(dir, 0755) != 0 && errno != EEXIST) {
+        AFMF_ERR("AFMF_DUMP_DIR %s cannot be created (%s); no frames will be written", dir,
+                 strerror(errno));
+        return;
+    }
 
     /* The generated frame, then the level-0 flow after the filter and straight from the search
      * (rg16i, one texel per block), the scene change detector's three words, and the level-0
@@ -973,7 +985,7 @@ void afmf_framegen_dump_write(struct afmf_device *dev, struct afmf_framegen *fg)
                      fg->dump_frame);
     FILE *out = n < 0 || (size_t)n >= sizeof path ? NULL : fopen(path, "wb");
     if (out == NULL) {
-        AFMF_WARN("cannot write %s", path);
+        AFMF_ERR("cannot write %s (%s)", path, strerror(errno));
         free(data);
         return;
     }
@@ -1003,6 +1015,7 @@ void afmf_framegen_dump_write(struct afmf_device *dev, struct afmf_framegen *fg)
                  fg->dump_frame);
     out = n < 0 || (size_t)n >= sizeof path ? NULL : fopen(path, "w");
     if (out == NULL) {
+        AFMF_ERR("cannot write %s (%s)", path, strerror(errno));
         free(data);
         return;
     }

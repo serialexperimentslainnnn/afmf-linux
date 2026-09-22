@@ -810,13 +810,26 @@ static VkResult resources_create(struct afmf_device *dev, struct afmf_framegen *
     return res;
 }
 
+/* The dump writes 8-bit PPM out of a four-byte-per-pixel readback: the two 8-bit variants as they
+ * are, the 10-bit one by taking the top bits of each channel. */
+static bool dump_writable(enum variant variant)
+{
+    return variant == VARIANT_RGBA8 || variant == VARIANT_RGBA8_BGRA || variant == VARIANT_RGB10A2;
+}
+
 /* Host-visible readback buffer for AFMF_DUMP_DIR; a failure here only disables the dumps. */
 static void dump_buffer_create(struct afmf_device *dev, struct afmf_framegen *fg)
 {
-    bool eight_bit = fg->variant == VARIANT_RGBA8 || fg->variant == VARIANT_RGBA8_BGRA;
     const char *dir = afmf_config_get()->dump_dir;
-    if (dir == NULL || !eight_bit)
+    if (dir == NULL)
         return;
+    /* Four bytes per pixel in the readback, whatever the writer then makes of them: the half-float
+     * formats would need twice the buffer and are left out. */
+    if (!dump_writable(fg->variant)) {
+        AFMF_ERR("AFMF_DUMP_DIR is set but this swapchain's format cannot be dumped; "
+                 "no frames will be written");
+        return;
+    }
 
     /* The directory is the user's to name, not to create: a dump that writes nothing because the
      * path does not exist yet is a diagnosis lost. Only the last component, as mkdir -p would
@@ -991,13 +1004,23 @@ void afmf_framegen_dump_write(struct afmf_device *dev, struct afmf_framegen *fg)
     }
     uint32_t w = fg->extent.width, h = fg->extent.height;
     (void)fprintf(out, "P6\n%u %u\n255\n", w, h);
-    /* The buffer holds what the swapchain sees: RGBA, or BGRA when the shader swapped for a
-     * B8G8R8A8 target, so undo the swap here. */
+    /* The buffer holds what the swapchain sees: RGBA, BGRA when the shader swapped for a
+     * B8G8R8A8 target (undone here), or A2B10G10R10 packed into a little-endian word, whose ten
+     * bits per channel are cut down to the PPM's eight. */
     bool bgra = fg->variant == VARIANT_RGBA8_BGRA;
+    bool packed10 = fg->variant == VARIANT_RGB10A2;
     uint8_t *row = malloc((size_t)w * 3);
     for (uint32_t y = 0; row != NULL && y < h; y++) {
         const uint8_t *px = data + (size_t)y * w * 4;
         for (uint32_t x = 0; x < w; x++, px += 4) {
+            if (packed10) {
+                uint32_t v = (uint32_t)px[0] | ((uint32_t)px[1] << 8) | ((uint32_t)px[2] << 16) |
+                             ((uint32_t)px[3] << 24);
+                row[x * 3] = (uint8_t)((v >> 2) & 0xffu);
+                row[x * 3 + 1] = (uint8_t)((v >> 12) & 0xffu);
+                row[x * 3 + 2] = (uint8_t)((v >> 22) & 0xffu);
+                continue;
+            }
             row[x * 3] = px[bgra ? 2 : 0];
             row[x * 3 + 1] = px[1];
             row[x * 3 + 2] = px[bgra ? 0 : 2];

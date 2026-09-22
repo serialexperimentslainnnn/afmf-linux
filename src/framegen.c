@@ -58,6 +58,7 @@ static const char *const stage_names[STAGE_COUNT] = {
 #define AFMF_CB_PER_SLOT (AFMF_LEVELS + 2u) /* one per pyramid level, one for the downsampler, one for the detector */
 #define AFMF_CB_SCD (AFMF_LEVELS + 1u)      /* the scene change detector's: level-0 luma, level 0 */
 #define AFMF_MIN_EXTENT 128u
+#define AFMF_MAX_IMAGES 16u /* swapchain images the direct paths keep a view and a set for */
 #define AFMF_MAX_TRUSTED_MOTION 64.0f /* pixels between frames; beyond it the flow is guesswork */
 
 /* ---- pass descriptions --------------------------------------------------------------------- */
@@ -123,8 +124,14 @@ struct interpolate_push {
 };
 
 struct downsample_push {
-    int32_t size[2];
+    int32_t size[2];   /* destination */
+    int32_t source[2]; /* the frame: with an odd extent it is not exactly twice the destination */
 };
+
+/* The GLSL side declares the same members in the same order; a member added on one side only
+ * would read the next one's bytes. */
+_Static_assert(sizeof(struct interpolate_push) == 28, "interpolate push constants");
+_Static_assert(sizeof(struct downsample_push) == 16, "downsample push constants");
 
 struct ingest_push {
     int32_t size[2];
@@ -133,6 +140,7 @@ struct ingest_push {
     float max_luminance;
     int32_t luma_half;
 };
+_Static_assert(sizeof(struct ingest_push) == 24, "ingest push constants");
 
 #define PASS(name, spv, push)                                                                     \
     {spv, spv##_size, bindings_##name, (uint32_t)(sizeof bindings_##name / sizeof(VkDescriptorType)), push}
@@ -1212,7 +1220,7 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
             return res;
     }
     if (fg->direct) {
-        VkDescriptorSetLayout interpolate_layouts[16];
+        VkDescriptorSetLayout interpolate_layouts[AFMF_MAX_IMAGES];
         for (uint32_t j = 0; j < fg->target_count; j++)
             interpolate_layouts[j] = pl->set_layouts[PASS_INTERPOLATE];
         fg->direct_sets = calloc(direct_sets, sizeof *fg->direct_sets);
@@ -1232,7 +1240,7 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
         }
     }
     if (fg->ingest_direct) {
-        VkDescriptorSetLayout ingest_layouts[16];
+        VkDescriptorSetLayout ingest_layouts[AFMF_MAX_IMAGES];
         for (uint32_t j = 0; j < fg->target_count; j++)
             ingest_layouts[j] = pl->set_layouts[PASS_INGEST];
         fg->ingest_sets = calloc(ingest_sets, sizeof *fg->ingest_sets);
@@ -1456,7 +1464,7 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
     fg->slots = slots;
     fg->swapchain_format = swapchain_format;
     fg->dump_from = AFMF_DUMP_FIRST;
-    bool have_images = images != NULL && image_count > 0 && image_count <= 16;
+    bool have_images = images != NULL && image_count > 0 && image_count <= AFMF_MAX_IMAGES;
     fg->direct_variant = direct_variant_for(dev, swapchain_format);
     fg->direct = have_images && direct_output && fg->direct_variant != VARIANT_COUNT;
     fg->ingest_variant = ingest_variant_for(dev, swapchain_format);
@@ -1477,7 +1485,7 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
     fg->half = swapchain_format == VK_FORMAT_R16G16B16A16_SFLOAT ? HALF_RGBA16F : HALF_RGBA8;
     /* At reduced flow resolution five levels already cover +-128 flow pixels (+-256 on screen): the
      * two coarsest levels are drains, not accuracy. `high` still forces all seven. */
-    fg->levels = cfg->flow_levels;
+    fg->levels = cfg->search_mode == AFMF_SEARCH_STANDARD ? 5u : 7u;
     if (fg->flow_scale > 1 && cfg->search_mode != AFMF_SEARCH_HIGH && fg->levels > 5)
         fg->levels = 5;
     if (fg->levels > AFMF_LEVELS)
@@ -1643,7 +1651,6 @@ static void initialize(struct afmf_device *dev, struct afmf_framegen *fg, VkComm
     clear_zero(dev, cmd, fg->scd_output.image);
     sync(dev, cmd);
     fg->initialized = true;
-    fg->frame_index = 0;
 }
 
 static uint32_t cb_offset(const struct afmf_framegen *fg, uint32_t slot, uint32_t index)
@@ -1653,7 +1660,7 @@ static uint32_t cb_offset(const struct afmf_framegen *fg, uint32_t slot, uint32_
 
 static void write_constants(struct afmf_framegen *fg, uint32_t slot, uint32_t level_count)
 {
-    for (uint32_t k = 0; k < AFMF_LEVELS; k++) {
+    for (uint32_t k = 0; k < fg->max_levels; k++) { /* levels above are never dispatched */
         struct cb_of of = {
             .input_luma_resolution = {(int32_t)fg->of_extent.width, (int32_t)fg->of_extent.height},
             .pyramid_level = k,
@@ -1869,6 +1876,16 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
     uint32_t w = fg->of_extent.width, h = fg->of_extent.height; /* optical flow dimensions */
     bool companion = target != VK_NULL_HANDLE;
 
+    /* The direct paths keep one view per swapchain image: an index past them is a broken
+     * caller, not a case to fall back from (the copy fallback would leave the luma unwritten,
+     * or copy from an output image that direct output never creates). */
+    if ((fg->ingest_direct && current_index >= fg->target_count) ||
+        (fg->direct && companion && target_index >= fg->target_count)) {
+        AFMF_ERR("frame %u / target %u outside the %u swapchain images: nothing recorded",
+                 current_index, target_index, fg->target_count);
+        return;
+    }
+
     if (!fg->initialized)
         initialize(dev, fg, cmd);
     write_constants(fg, slot, levels);
@@ -1883,7 +1900,7 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
      *    in performance mode. The direct pass writes the luma at the flow's own size, so
      *    performance mode costs it a read of the frame and nothing else; the copy path has to
      *    downscale the colour and take the luma from it, two more passes over the frame. */
-    if (fg->ingest_direct && current_index < fg->target_count) {
+    if (fg->ingest_direct) {
         struct ingest_push push = {
             .size = {(int32_t)fg->extent.width, (int32_t)fg->extent.height},
             .transfer_function = (int32_t)fg->transfer_function,
@@ -1904,7 +1921,10 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
         sync(dev, cmd);
     }
     if (fg->flow_scale > 1 && !fg->ingest_direct) {
-        struct downsample_push push = {.size = {(int32_t)w, (int32_t)h}};
+        struct downsample_push push = {
+            .size = {(int32_t)w, (int32_t)h},
+            .source = {(int32_t)fg->extent.width, (int32_t)fg->extent.height},
+        };
         dev->fns.cmd_push_constants(cmd, pl->layouts[PASS_DOWNSAMPLE], VK_SHADER_STAGE_COMPUTE_BIT,
                                     0, (uint32_t)sizeof push, &push);
         dispatch(dev, cmd, pl->downsample[fg->half], pl->layouts[PASS_DOWNSAMPLE],
@@ -1919,7 +1939,7 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
      *    output, target in GENERAL) or copied from fg->output (target in TRANSFER_DST). */
     if (companion) {
         uint32_t out_w = fg->extent.width, out_h = fg->extent.height;
-        if (fg->direct && target_index < fg->target_count) {
+        if (fg->direct) {
             record_interpolate(dev, fg, cmd, slot, fg->direct_sets[p * fg->target_count + target_index],
                                fg->direct_variant);
         } else {

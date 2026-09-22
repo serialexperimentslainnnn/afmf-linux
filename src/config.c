@@ -157,11 +157,12 @@ static void init(void)
     g_config.acquire_timeout_ns = (uint64_t)acquire_timeout_us * 1000u;
     g_config.interpolate = interpolate != 0;
     g_config.search_mode = (enum afmf_search_mode)search_mode;
-    g_config.flow_levels = search_mode == AFMF_SEARCH_STANDARD ? 5u : 7u;
     g_config.fast_motion = (enum afmf_fast_motion_response)fast_motion;
     g_config.performance = (enum afmf_performance_mode)performance;
+    /* Copied: the pointer getenv returns lives in the environment block, which a later setenv
+     * (Wine does them) may move. Kept for the life of the process. */
     const char *dump_dir = getenv("AFMF_DUMP_DIR");
-    g_config.dump_dir = dump_dir != NULL && *dump_dir != '\0' ? dump_dir : NULL;
+    g_config.dump_dir = dump_dir != NULL && *dump_dir != '\0' ? strdup(dump_dir) : NULL;
     g_config.profile = profile != 0 || log_level >= AFMF_LOG_DEBUG;
     g_config.async = async != 0;
     g_config.pacing = pacing != 0;

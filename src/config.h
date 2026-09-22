@@ -30,7 +30,6 @@ struct afmf_config {
     uint32_t extra_images;       /* AFMF_EXTRA_IMAGES, 1..8: swapchain images added for generation */
     uint64_t acquire_timeout_ns; /* AFMF_ACQUIRE_TIMEOUT_US: how long to wait for the spare's release */
     bool interpolate;            /* AFMF_INTERPOLATE=0 falls back to repeating the previous frame */
-    uint32_t flow_levels;        /* optical flow pyramid levels derived from search_mode: 5 or 7 */
     enum afmf_search_mode search_mode; /* AFMF_SEARCH_MODE: auto | standard | high */
     enum afmf_fast_motion_response fast_motion; /* AFMF_FAST_MOTION_RESPONSE: repeat | blend */
     enum afmf_performance_mode performance;     /* AFMF_PERFORMANCE_MODE: auto | quality | performance */

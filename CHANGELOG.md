@@ -6,6 +6,41 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A device-level command resolved through `vkGetInstanceProcAddr` was hooked even when the
+  driver below lacked it, so on a driver without core `vkQueueSubmit2` a game resolving it that
+  way had every submission dropped. The instance route now answers as the device route does:
+  a hook only for a command the chain below has, and nothing for a null instance.
+- The hooks answered an unknown device with `VK_ERROR_INITIALIZATION_FAILED`, which
+  `vkQueueSubmit`, `vkQueuePresentKHR` and the swapchain commands cannot return; they answer
+  `VK_ERROR_DEVICE_LOST`.
+- The registry lock taken on every submission and present of the game is a read-write lock:
+  a game submitting from several threads no longer serialises them on the layer.
+- The layer's queue joined a protected queue request of the game's when both were in the same
+  family, which made it protected too and its handle invalid; it joins an unprotected request
+  or asks for one of its own.
+- When `vkCreateDevice` failed with the layer's additions (its queue, `shaderInt16`), the
+  failure reached the game. The request goes down once more exactly as the game wrote it.
+- The governor's one-in-two and one-in-three steps paced on the present counter, which the
+  game's thread had moved past the frame being decided, so the cadence came out as pairs and
+  gaps; each frame now carries its own number.
+- A per-present mode list longer than the layer can carry was cut short in silence; the
+  game's mode is kept instead. The FIFO-to-MAILBOX rewrite also applies on the inline path
+  when the mode request heads the present chain.
+- With pacing on, a hold under half a millisecond became no hold at all, and in MAILBOX two
+  presents in the same instant dropped the generated frame; the minimum hold applies. The
+  hold's ceiling is 40 ms, so the generated frame stays halfway down to 12.5 fps.
+- The release fence of the companion's image got no time when the acquire had spent the whole
+  budget; it gets a millisecond, and a companion that was there is no longer skipped.
+- The HDR luma is clamped before it is stored as a byte: a pixel brighter than the peak used to
+  wrap to a dark value, and an out-of-gamut scRGB value reached a cube root as a negative.
+- `AFMF_DUMP_DIR` is copied out of the environment block, which Wine moves.
+- A swapchain image index outside what the direct paths keep a view for is an error and
+  records nothing, instead of a fallback that left the luma unwritten or copied from an image
+  direct output never creates.
+- The half-resolution downscale on the copy path sampled the centre of each 2x2 quad against
+  the destination size, which drifts by a texel on an odd frame.
+
 ## [1.3.0] - 2026-09-22
 
 ### Changed

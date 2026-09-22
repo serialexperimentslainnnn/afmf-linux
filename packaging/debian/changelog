@@ -1,3 +1,11 @@
+afmf-linux (1.2.0-1) unstable; urgency=medium
+
+  * Fixed: the block search keeps a vector only with evidence behind it. A block whose picture
+    carries no detail (fog, snow, sky) used to inherit the coarse level's guess and warp the
+    background with it, smearing moving silhouettes; it now stores the zero vector.
+
+ -- Lain <lain@digitalexperiments.dev>  Tue, 22 Sep 2026 18:00:00 +0200
+
 afmf-linux (1.1.1-1) unstable; urgency=medium
 
   * Fixed: AFMF_DUMP_DIR creates the directory it names instead of writing nothing when it does

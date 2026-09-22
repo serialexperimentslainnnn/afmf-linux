@@ -6,6 +6,18 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-22
+
+### Fixed
+- A block of the picture with no detail to match (fog, snow, an open sky) used to keep whatever
+  vector the coarser pyramid level handed it, because there every candidate matches about as
+  well as any other and the match looked good enough to skip the search. The layer then warped
+  the background with the motion of whatever was next to it, which is what smeared a moving
+  silhouette over its surroundings. A block now keeps a vector only with evidence for it: the
+  prediction has to match at least twice as well as staying put, and so does the winner of the
+  search, at every pyramid level; otherwise the block stores the zero vector. The search's cost
+  is unchanged, both sums travelling in one word.
+
 ## [1.1.1] - 2026-09-22
 
 ### Added
@@ -186,7 +198,8 @@ First public release.
 - Headless integration test under the Khronos validation layer, vkcube smoke test, sanitizer
   build, GCC `-fanalyzer` and ShellCheck gates.
 
-[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.2.0
 [1.1.1]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.1.1
 [1.1.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.1.0
 [1.0.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.0.0

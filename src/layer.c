@@ -41,7 +41,9 @@ struct afmf_instance {
     struct afmf_instance *next;
 };
 
-static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Readers on every submit and present from every thread of the application; writers only at
+ * instance and device creation and destruction. */
+static pthread_rwlock_t g_lock = PTHREAD_RWLOCK_INITIALIZER;
 static struct afmf_instance *g_instances;
 static struct afmf_device *g_devices;
 
@@ -63,47 +65,47 @@ static void *dispatch_key(const void *handle)
 
 static struct afmf_instance *instance_find(void *key)
 {
-    pthread_mutex_lock(&g_lock);
+    pthread_rwlock_rdlock(&g_lock);
     struct afmf_instance *inst = g_instances;
     while (inst != NULL && inst->key != key)
         inst = inst->next;
-    pthread_mutex_unlock(&g_lock);
+    pthread_rwlock_unlock(&g_lock);
     return inst;
 }
 
 static struct afmf_instance *instance_take(void *key)
 {
-    pthread_mutex_lock(&g_lock);
+    pthread_rwlock_wrlock(&g_lock);
     struct afmf_instance **link = &g_instances;
     while (*link != NULL && (*link)->key != key)
         link = &(*link)->next;
     struct afmf_instance *inst = *link;
     if (inst != NULL)
         *link = inst->next;
-    pthread_mutex_unlock(&g_lock);
+    pthread_rwlock_unlock(&g_lock);
     return inst;
 }
 
 static struct afmf_device *device_find(void *key)
 {
-    pthread_mutex_lock(&g_lock);
+    pthread_rwlock_rdlock(&g_lock);
     struct afmf_device *dev = g_devices;
     while (dev != NULL && dev->key != key)
         dev = dev->next;
-    pthread_mutex_unlock(&g_lock);
+    pthread_rwlock_unlock(&g_lock);
     return dev;
 }
 
 static struct afmf_device *device_take(void *key)
 {
-    pthread_mutex_lock(&g_lock);
+    pthread_rwlock_wrlock(&g_lock);
     struct afmf_device **link = &g_devices;
     while (*link != NULL && (*link)->key != key)
         link = &(*link)->next;
     struct afmf_device *dev = *link;
     if (dev != NULL)
         *link = dev->next;
-    pthread_mutex_unlock(&g_lock);
+    pthread_rwlock_unlock(&g_lock);
     return dev;
 }
 
@@ -129,12 +131,19 @@ static uint32_t choose_async_family(const struct afmf_device *dev, const VkDevic
             VkQueueFlags flags = dev->queue_families[f].queueFlags;
             if (!(flags & VK_QUEUE_COMPUTE_BIT) || (compute_only && (flags & VK_QUEUE_GRAPHICS_BIT)))
                 continue;
-            uint32_t requested = 0;
-            for (uint32_t i = 0; i < info->queueCreateInfoCount; i++)
-                if (info->pQueueCreateInfos[i].queueFamilyIndex == f)
-                    requested += info->pQueueCreateInfos[i].queueCount;
+            /* The family's capacity counts every request; the index of the layer's queue counts
+             * only the unprotected ones, since vkGetDeviceQueue indexes those alone. */
+            uint32_t requested = 0, unprotected = 0;
+            for (uint32_t i = 0; i < info->queueCreateInfoCount; i++) {
+                const VkDeviceQueueCreateInfo *q = &info->pQueueCreateInfos[i];
+                if (q->queueFamilyIndex != f)
+                    continue;
+                requested += q->queueCount;
+                if (!(q->flags & VK_DEVICE_QUEUE_CREATE_PROTECTED_BIT))
+                    unprotected += q->queueCount;
+            }
             if (requested < dev->queue_families[f].queueCount) {
-                *index = requested;
+                *index = unprotected;
                 return f;
             }
         }
@@ -211,7 +220,11 @@ static VkDeviceQueueCreateInfo *queues_with_extra(const VkDeviceCreateInfo *info
     *priorities = NULL;
 
     for (uint32_t i = 0; i < info->queueCreateInfoCount; i++) {
-        if (queues[i].queueFamilyIndex != family)
+        /* The layer's queue joins the family's unprotected entry; a protected one would make
+         * it protected too. A family may carry one entry of each kind, so when only the
+         * protected one exists the layer adds an unprotected entry of its own below. */
+        if (queues[i].queueFamilyIndex != family ||
+            (queues[i].flags & VK_DEVICE_QUEUE_CREATE_PROTECTED_BIT))
             continue;
         /* The family is already requested: one more queue, its priorities array extended. */
         uint32_t n = queues[i].queueCount + 1;
@@ -365,10 +378,10 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateInstance(const VkInstanceCreate
     inst->get_features = get_features;
     inst->enumerate_device_extensions = enumerate_extensions;
 
-    pthread_mutex_lock(&g_lock);
+    pthread_rwlock_wrlock(&g_lock);
     inst->next = g_instances;
     g_instances = inst;
-    pthread_mutex_unlock(&g_lock);
+    pthread_rwlock_unlock(&g_lock);
 
     /* Which display sockets the process can see: a Wine process without WAYLAND_DISPLAY falls
      * back to X11 whatever PROTON_ENABLE_WAYLAND says, and the surface line later shows it. */
@@ -591,6 +604,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
     VkPhysicalDeviceFeatures features = {0};
     VkPhysicalDeviceFeatures2 features2;
     inst->get_features(physical_device, &supported);
+    bool app_int16 = dev->shader_int16; /* what the application asked for, before any patch */
     if (!afmf_config_get()->sad_int16)
         dev->shader_int16 = false; /* the feature may stay on; the search does not use it */
     else if (!dev->shader_int16 && supported.shaderInt16) {
@@ -664,6 +678,17 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
         try_high = false;
         res = next_create(physical_device, &patched, alloc, out);
     }
+    if (res != VK_SUCCESS && (async_family != UINT32_MAX || patched.pEnabledFeatures != info->pEnabledFeatures ||
+                              patched.pNext != info->pNext)) {
+        /* Whatever the layer added (its queue, shaderInt16) may be what failed: the
+         * application's request as it came, so an implicit layer never fails a device that
+         * would have been created without it. The layer then shares a queue and, without
+         * shaderInt16, runs the scalar SAD. */
+        link->u.pLayerInfo = next_link;
+        async_family = UINT32_MAX;
+        dev->shader_int16 = afmf_config_get()->sad_int16 && app_int16;
+        res = next_create(physical_device, info, alloc, out);
+    }
     dev->async_high_priority = try_high;
     free(extensions);
     free(queues);
@@ -700,10 +725,10 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_CreateDevice(VkPhysicalDevice physica
         dev->async_shared = dev->async_shared && dev->async_queue != VK_NULL_HANDLE;
     }
 
-    pthread_mutex_lock(&g_lock);
+    pthread_rwlock_wrlock(&g_lock);
     dev->next = g_devices;
     g_devices = dev;
-    pthread_mutex_unlock(&g_lock);
+    pthread_rwlock_unlock(&g_lock);
 
     /* The shaders compile while the application sets itself up, not on its first present. */
     if (dev->fns.queue_present != NULL)
@@ -755,7 +780,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueSubmit(VkQueue queue, uint32_t c
 {
     struct afmf_device *dev = device_find(dispatch_key(queue));
     if (dev == NULL)
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_DEVICE_LOST;
     if (!shared_queue(dev, queue))
         return dev->fns.queue_submit(queue, count, submits, fence);
     pthread_mutex_lock(&dev->async_lock);
@@ -769,7 +794,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueSubmit2(VkQueue queue, uint32_t 
 {
     struct afmf_device *dev = device_find(dispatch_key(queue));
     if (dev == NULL || dev->fns.queue_submit2 == NULL)
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_DEVICE_LOST;
     if (!shared_queue(dev, queue))
         return dev->fns.queue_submit2(queue, count, submits, fence);
     pthread_mutex_lock(&dev->async_lock);
@@ -784,7 +809,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueSubmit2KHR(VkQueue queue, uint32
 {
     struct afmf_device *dev = device_find(dispatch_key(queue));
     if (dev == NULL || dev->fns.queue_submit2_khr == NULL)
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_DEVICE_LOST;
     if (!shared_queue(dev, queue))
         return dev->fns.queue_submit2_khr(queue, count, submits, fence);
     pthread_mutex_lock(&dev->async_lock);
@@ -799,7 +824,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueBindSparse(VkQueue queue, uint32
 {
     struct afmf_device *dev = device_find(dispatch_key(queue));
     if (dev == NULL || dev->fns.queue_bind_sparse == NULL)
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_DEVICE_LOST;
     if (!shared_queue(dev, queue))
         return dev->fns.queue_bind_sparse(queue, count, binds, fence);
     pthread_mutex_lock(&dev->async_lock);
@@ -814,7 +839,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_DeviceWaitIdle(VkDevice device)
 {
     struct afmf_device *dev = device_find(dispatch_key(device));
     if (dev == NULL)
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_DEVICE_LOST;
     afmf_swapchain_drain_all(dev);
     if (dev->async_queue == VK_NULL_HANDLE)
         return dev->fns.device_wait_idle(device);
@@ -828,7 +853,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueueWaitIdle(VkQueue queue)
 {
     struct afmf_device *dev = device_find(dispatch_key(queue));
     if (dev == NULL)
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_DEVICE_LOST;
     if (!shared_queue(dev, queue))
         return dev->fns.queue_wait_idle(queue);
     pthread_mutex_lock(&dev->async_lock);
@@ -909,7 +934,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_GetSwapchainImagesKHR(VkDevice device
 {
     struct afmf_device *dev = device_find(dispatch_key(device));
     if (dev == NULL || dev->fns.get_swapchain_images == NULL)
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_DEVICE_LOST;
     return afmf_swapchain_get_images(dev, swapchain, count, images);
 }
 
@@ -921,7 +946,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_AcquireNextImageKHR(VkDevice device,
 {
     struct afmf_device *dev = device_find(dispatch_key(device));
     if (dev == NULL || dev->fns.acquire_next_image == NULL)
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_DEVICE_LOST;
     VkAcquireNextImageInfoKHR info = {
         .sType = VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR,
         .swapchain = swapchain,
@@ -938,7 +963,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_AcquireNextImage2KHR(VkDevice device,
 {
     struct afmf_device *dev = device_find(dispatch_key(device));
     if (dev == NULL || dev->fns.acquire_next_image2 == NULL)
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_DEVICE_LOST;
     return afmf_swapchain_acquire(dev, info, true, index);
 }
 
@@ -948,7 +973,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL afmf_QueuePresentKHR(VkQueue queue,
     struct afmf_device *dev = device_find(dispatch_key(queue));
     if (dev == NULL || dev->fns.queue_present == NULL) {
         AFMF_ERR("vkQueuePresentKHR on queue %p of an unknown device", (void *)queue);
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_DEVICE_LOST;
     }
     return afmf_swapchain_present(dev, queue, info);
 }
@@ -1037,19 +1062,21 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL afmf_GetInstanceProcAddr(VkInsta
                                                                           const char *name)
 {
     PFN_vkVoidFunction fn = lookup(instance_hooks, ARRAY_LEN(instance_hooks), name);
-    if (fn == NULL)
-        fn = lookup(device_hooks, ARRAY_LEN(device_hooks), name);
-    if (fn == NULL)
-        fn = lookup(swapchain_hooks, ARRAY_LEN(swapchain_hooks), name);
     if (fn != NULL)
         return fn;
 
+    /* A device-level or surface hook only where the chain below has the command, as the device
+     * route does: a hook handed out for a command the driver lacks has nothing to forward to. */
     if (instance == VK_NULL_HANDLE)
         return NULL;
     struct afmf_instance *inst = instance_find(dispatch_key(instance));
     if (inst == NULL)
         return NULL;
-    fn = lookup(surface_hooks, ARRAY_LEN(surface_hooks), name);
+    fn = lookup(device_hooks, ARRAY_LEN(device_hooks), name);
+    if (fn == NULL)
+        fn = lookup(swapchain_hooks, ARRAY_LEN(swapchain_hooks), name);
+    if (fn == NULL)
+        fn = lookup(surface_hooks, ARRAY_LEN(surface_hooks), name);
     if (fn != NULL)
         return inst->gipa(instance, name) != NULL ? fn : NULL;
     return inst->gipa(instance, name);

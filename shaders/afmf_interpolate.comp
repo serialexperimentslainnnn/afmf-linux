@@ -48,8 +48,20 @@ layout(push_constant) uniform Params {
 const int SCD_SCENE_CHANGE_SLOT = 0;
 const int SCD_HISTORY_BITS_SLOT = 1;
 
+// Blocks whose vectors differ by more than this (flow pixels, squared) are two objects, not one
+// surface: interpolating between them gives a vector that is right for neither.
+const float FLOW_EDGE_SQ = 36.0;
+
+float dist_sq(vec2 a, vec2 b)
+{
+    vec2 d = a - b;
+    return dot(d, d);
+}
+
 // Flow at pixel y, bilinearly interpolated between the four nearest block centres so the field
-// has no 8-pixel steps.
+// has no 8-pixel steps, except across a motion edge (the silhouette of a pillar against a
+// background moving past it), where the nearest block's own vector is used: a vector halfway
+// between an object and its background warps both wrongly and draws a halo.
 vec2 flow_at(vec2 y)
 {
     vec2 b = y / (float(p.block) * p.flow_scale) - 0.5;
@@ -62,6 +74,12 @@ vec2 flow_at(vec2 y)
     vec2 v10 = vec2(texelFetch(u_flow, ivec2(b1.x, b0.y), 0).xy);
     vec2 v01 = vec2(texelFetch(u_flow, ivec2(b0.x, b1.y), 0).xy);
     vec2 v11 = vec2(texelFetch(u_flow, ivec2(b1.x, b1.y), 0).xy);
+    float spread = max(max(dist_sq(v00, v10), dist_sq(v01, v11)),
+                       max(dist_sq(v00, v01), dist_sq(v10, v11)));
+    if (spread > FLOW_EDGE_SQ) {
+        vec2 nearest = f.x < 0.5 ? (f.y < 0.5 ? v00 : v01) : (f.y < 0.5 ? v10 : v11);
+        return nearest * p.flow_scale;
+    }
     return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y) * p.flow_scale;
 }
 
@@ -100,7 +118,16 @@ void main()
         vec2 half_v = 0.5 * v;
         vec4 from_cur = texture(u_cur, (y - half_v) * inv_size);
         vec4 from_prev = texture(u_prev, (y + half_v) * inv_size);
-        colour = 0.5 * (from_cur + from_prev);
+        // The two warps agree where the vector is right and the content exists in both
+        // frames; where they disagree (a wrong vector, or a background uncovered from behind
+        // a passing object, which only one frame holds) averaging them draws both, a double
+        // image. The blend then leans on the newer frame, which is what shows next anyway.
+        // Measured relative to the local level so HDR values are judged the same way.
+        vec3 diff = abs(from_cur.rgb - from_prev.rgb);
+        float level = 0.5 * (dot(from_cur.rgb, vec3(1.0 / 3.0)) + dot(from_prev.rgb, vec3(1.0 / 3.0)));
+        float disagreement = max(diff.r, max(diff.g, diff.b)) / (level + 0.05);
+        float newer = smoothstep(0.15, 0.6, disagreement);
+        colour = mix(0.5 * (from_cur + from_prev), from_cur, newer);
     } else if (p.fallback == 1) {
         colour = 0.5 * (texture(u_cur, y * inv_size) + texture(u_prev, y * inv_size));
     } else {

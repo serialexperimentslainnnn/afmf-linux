@@ -51,7 +51,10 @@ enum stage {
 #define AFMF_CB_SCD (AFMF_LEVELS + 1u)      /* the scene change detector's: level-0 luma, level 0 */
 #define AFMF_MIN_EXTENT 128u
 #define AFMF_MAX_IMAGES 16u /* swapchain images the direct paths keep a view and a set for */
-#define AFMF_MAX_TRUSTED_MOTION 64.0f /* pixels between frames; beyond it the flow is guesswork */
+/* Pixels between frames beyond which the flow is not believed: half of what the search reaches
+ * at half resolution (five levels, +-256 on screen). Lower, and a fast pan falls back to the
+ * blind blend over most of the picture, which is a double image. */
+#define AFMF_MAX_TRUSTED_MOTION 128.0f
 
 enum pass {
     PASS_PREPARE_LUMA,

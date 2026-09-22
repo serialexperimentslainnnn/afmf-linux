@@ -6,6 +6,16 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Ghosting on fast camera motion: a pillar or a billboard passing the camera used to show a
+  double edge. Three causes, three changes in the interpolator. Motion is believed up to 128
+  pixels between frames instead of 64 (the search reaches 256 at half resolution), so a fast
+  pan no longer falls back to the blind blend of both frames over most of the picture. Where
+  the two warped samples disagree (a wrong vector, or a background uncovered from behind an
+  object, which only one frame holds) the blend leans on the newer frame instead of drawing
+  both. And the flow is no longer interpolated across a motion edge between blocks: a vector
+  halfway between an object and its background warped both wrongly and drew a halo.
+
 ## [1.3.1] - 2026-09-22
 
 ### Fixed

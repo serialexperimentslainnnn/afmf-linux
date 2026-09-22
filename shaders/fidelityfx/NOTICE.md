@@ -23,7 +23,10 @@ Local edits, every line of them marked `afmf-linux:`:
   (`AFMF_STATIC_BLOCK_SAD`, 0 = the SDK's behaviour) did not move: it stores the zero vector and
   skips the search. A block whose predicted vector is at or under it and at least twice as good
   as rest keeps that vector and skips the search; without the second test a textureless block
-  keeps whatever the coarser level handed it, since there every candidate matches equally well; the SDK's level-0 zero-vector
+  keeps whatever the coarser level handed it, since there every candidate matches equally well.
+  The search's winner is kept only when it too is at least twice as good as rest, at every level
+  (the SDK dropped it at level 0 alone, and only when rest matched at least as well), so a block
+  with no detail to match stores the zero vector instead of noise; the SDK's level-0 zero-vector
   fallback only computes its sum at level 0. The cross-subgroup sum and minimum combine
   `gl_NumSubgroups` partials through shared memory instead of exactly two of 32 lanes, so the
   result is uniform across the group on every subgroup size (ANV picks 8 or 16).

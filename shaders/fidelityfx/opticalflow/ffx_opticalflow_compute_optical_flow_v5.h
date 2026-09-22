@@ -294,12 +294,12 @@ void ComputeOpticalFlowAdvanced(FfxInt32x2 iGlobalId, FfxInt32x2 iLocalId, FfxIn
     // level (zero at the coarsest) and its SAD where it already is, all before the loop: every
     // lane belongs to one block, so it compares its four pixels against the previous frame at
     // both places, and one wave sum per block gives the block's two sums. The loop below uses
-    // them to decide whether the block may skip its 256-candidate search. The sums are uniform
-    // across the group, so the branches in the loop are too; the barriers keep one sum's
-    // cross-wave read clear of the next one's write.
+    // them to decide whether the block may skip its 256-candidate search, and afterwards to
+    // decide whether the search's winner is worth believing. The sums are uniform across the
+    // group, so the branches in the loop are too; the barriers keep one sum's cross-wave read
+    // clear of the next one's write.
     FfxUInt32 predictedSad[4] = {0u, 0u, 0u, 0u};
     FfxUInt32 restSad[4] = {0u, 0u, 0u, 0u};
-    if (afmfStaticBlockSad != 0u)
     {
         FfxInt32x2 laneBlock = FfxInt32x2(iLaneToBlockId & 1, iLaneToBlockId >> 1);
         FfxInt32x2 laneVector = bUsePredictionFromPreviousLevel ? LoadRwOpticalFlow(ofGroupOffset + laneBlock) : FfxInt32x2(0, 0);
@@ -367,15 +367,15 @@ void ComputeOpticalFlowAdvanced(FfxInt32x2 iGlobalId, FfxInt32x2 iLocalId, FfxIn
             FfxInt32x2 newVector = currentVector + minSadCoord;
 
 #if FFX_LOCAL_SEARCH_FALLBACK == 1
-            // afmf-linux: the zero-vector fallback only applies at level 0; the wave sum and its
-            // barrier are skipped at the six levels that never use it (the level is uniform).
-            if (OpticalFlowPyramidLevel() == 0)
+            // afmf-linux: the winner has to earn the block. The SDK dropped it at level 0 when
+            // staying put matched at least as well; here that applies at every level, and the
+            // winner must be clearly better, not merely better: where the picture carries no
+            // detail every candidate matches about as well as the rest, and the one that wins by
+            // a hair is noise the interpolator would warp the background with. Its sum is the one
+            // taken before the loop, so this costs no wave sum of its own.
+            if ((minSad >> 16u) * 2u > restSad[blockIndex])
             {
-                FfxUInt32 blockSadSum = BlockSad64(sad_4blocks, iLocalIndex, iLaneToBlockId, blockId.x + blockId.y * 2);
-                if (blockSadSum <= (minSad >> 16u))
-                {
-                    newVector = FfxInt32x2(0, 0);
-                }
+                newVector = FfxInt32x2(0, 0);
             }
 #endif //FFX_LOCAL_SEARCH_FALLBACK
 

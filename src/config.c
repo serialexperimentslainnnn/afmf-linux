@@ -118,6 +118,9 @@ static void init(void)
     /* The block search's SAD on packed 16-bit pairs (shaderInt16, which the layer enables on the
      * device when the application did not); 0 keeps the SDK's byte-at-a-time code. */
     long sad_int16 = 1;
+    /* Generated frames written per swapchain with AFMF_DUMP_DIR; 0 writes every frame until the
+     * game ends. Each one stalls on its submission and costs a few megabytes on disk. */
+    long dump_frames = 4;
 
     static const struct choice search_modes[] = {{"auto", AFMF_SEARCH_AUTO},
                                                 {"standard", AFMF_SEARCH_STANDARD},
@@ -148,6 +151,7 @@ static void init(void)
     ok = read_bounded("AFMF_HUD_DETECT", 0, 1, &hud_detect) && ok;
     ok = read_bounded("AFMF_DIRECT_INGEST", 0, 1, &direct_ingest) && ok;
     ok = read_bounded("AFMF_SAD_INT16", 0, 1, &sad_int16) && ok;
+    ok = read_bounded("AFMF_DUMP_FRAMES", 0, 100000, &dump_frames) && ok;
 
     g_config.log_level = (int)log_level;
     g_config.extra_images = (uint32_t)extra_images;
@@ -159,6 +163,7 @@ static void init(void)
     g_config.performance = (enum afmf_performance_mode)performance;
     const char *dump_dir = getenv("AFMF_DUMP_DIR");
     g_config.dump_dir = dump_dir != NULL && *dump_dir != '\0' ? dump_dir : NULL;
+    g_config.dump_frames = (uint32_t)dump_frames;
     g_config.profile = profile != 0 || log_level >= AFMF_LOG_DEBUG;
     g_config.async = async != 0;
     g_config.pacing = pacing != 0;

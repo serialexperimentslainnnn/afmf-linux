@@ -131,6 +131,7 @@ struct ingest_push {
     int32_t transfer_function;
     float min_luminance;
     float max_luminance;
+    int32_t luma_half;
 };
 
 #define PASS(name, spv, push)                                                                     \
@@ -751,7 +752,8 @@ static VkResult resources_create(struct afmf_device *dev, struct afmf_framegen *
         if (res != VK_SUCCESS)
             return res;
     }
-    if (fg->flow_scale > 1) {
+    /* Only the copy path needs it: direct ingest writes the luma at the flow's size itself. */
+    if (fg->flow_scale > 1 && !fg->ingest_direct) {
         res = image_create(dev, &fg->color_half, downsample_variants[fg->half].format, fg->of_extent,
                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         if (res != VK_SUCCESS)
@@ -1254,8 +1256,12 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
         uint32_t q = 1u - p; /* the other parity: previous frame's luma, previous colour */
         struct set_writer w;
 
+        /* Unused with direct ingest, which writes the luma itself; the half-size colour it would
+         * read does not exist then. */
         writer_begin(&w, dev, fg->sets[p][SET_PREPARE]);
-        writer_image(&w, 0, SAMPLED, fg->flow_scale > 1 ? fg->color_half.view : fg->color[p].view,
+        writer_image(&w, 0, SAMPLED,
+                     fg->flow_scale > 1 && !fg->ingest_direct ? fg->color_half.view
+                                                              : fg->color[p].view,
                      VK_NULL_HANDLE);
         writer_image(&w, 1, STORAGE, fg->luma[p][0].view, VK_NULL_HANDLE);
         writer_ubo(&w, 2, fg->cb);
@@ -1325,7 +1331,7 @@ static VkResult descriptor_sets_create(struct afmf_device *dev, struct afmf_fram
             writer_end(&w);
         }
 
-        if (fg->flow_scale > 1) {
+        if (fg->flow_scale > 1 && !fg->ingest_direct) {
             writer_begin(&w, dev, fg->sets[p][SET_DOWNSAMPLE]);
             writer_image(&w, 0, COMBINED, fg->color[p].view, fg->sampler);
             writer_image(&w, 1, STORAGE, fg->color_half.view, VK_NULL_HANDLE);
@@ -1466,8 +1472,6 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
     if (extent.width / 2 < AFMF_MIN_EXTENT || extent.height / 2 < AFMF_MIN_EXTENT)
         half = false; /* too small for the pyramid at half size: full resolution instead */
     fg->flow_scale = half ? 2u : 1u;
-    if (half)
-        fg->ingest_direct = false; /* the luma then comes from the downscaled colour */
     fg->of_extent.width = (extent.width + fg->flow_scale - 1) / fg->flow_scale;
     fg->of_extent.height = (extent.height + fg->flow_scale - 1) / fg->flow_scale;
     fg->half = swapchain_format == VK_FORMAT_R16G16B16A16_SFLOAT ? HALF_RGBA16F : HALF_RGBA8;
@@ -1498,7 +1502,8 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
     else if (!format_supports(dev, fg->out_format, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) ||
              !format_supports(dev, fg->color_format, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
         blocker = "device lacks storage or filtered sampling for the swapchain format";
-    else if (half && !format_supports(dev, downsample_variants[fg->half].format,
+    else if (half && !fg->ingest_direct &&
+             !format_supports(dev, downsample_variants[fg->half].format,
                                       VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
         blocker = "device lacks storage for the half-resolution colour";
     else if (!format_supports(dev, VK_FORMAT_R32_UINT, VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT))
@@ -1875,25 +1880,30 @@ void afmf_framegen_record(struct afmf_device *dev, struct afmf_framegen *fg, VkC
 
     /* 1. The new frame into the colour ring: one pass that also writes its luma (direct ingest,
      *    the swapchain image sampled in GENERAL), or a copy, then downscaled for the flow when
-     *    in performance mode. */
+     *    in performance mode. The direct pass writes the luma at the flow's own size, so
+     *    performance mode costs it a read of the frame and nothing else; the copy path has to
+     *    downscale the colour and take the luma from it, two more passes over the frame. */
     if (fg->ingest_direct && current_index < fg->target_count) {
         struct ingest_push push = {
             .size = {(int32_t)fg->extent.width, (int32_t)fg->extent.height},
             .transfer_function = (int32_t)fg->transfer_function,
             .min_luminance = fg->min_luminance,
             .max_luminance = fg->max_luminance,
+            .luma_half = fg->flow_scale > 1 ? 1 : 0,
         };
+        uint32_t ingest_w = fg->flow_scale > 1 ? w : fg->extent.width;
+        uint32_t ingest_h = fg->flow_scale > 1 ? h : fg->extent.height;
         dev->fns.cmd_push_constants(cmd, pl->layouts[PASS_INGEST], VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                     (uint32_t)sizeof push, &push);
         dispatch(dev, cmd, pl->ingest[fg->ingest_variant], pl->layouts[PASS_INGEST],
                  fg->ingest_sets[p * fg->target_count + current_index], NULL, 0,
-                 (fg->extent.width + 7) / 8, (fg->extent.height + 7) / 8, 1);
+                 (ingest_w + 7) / 8, (ingest_h + 7) / 8, 1);
     } else {
         copy_whole(dev, cmd, current, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fg->color[p].image,
                    VK_IMAGE_LAYOUT_GENERAL, fg->extent);
         sync(dev, cmd);
     }
-    if (fg->flow_scale > 1) {
+    if (fg->flow_scale > 1 && !fg->ingest_direct) {
         struct downsample_push push = {.size = {(int32_t)w, (int32_t)h}};
         dev->fns.cmd_push_constants(cmd, pl->layouts[PASS_DOWNSAMPLE], VK_SHADER_STAGE_COMPUTE_BIT,
                                     0, (uint32_t)sizeof push, &push);

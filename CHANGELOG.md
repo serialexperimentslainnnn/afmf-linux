@@ -6,6 +6,12 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `AFMF_PERFORMANCE_MODE=performance` reads the game's frame once, as full resolution already
+  did: the ingest pass writes the colour ring at frame size and the luma at the flow's size in
+  the same pass. It used to copy the whole frame, downscale the copy and take the luma from it,
+  three passes over the frame instead of one.
+
 ### Fixed
 - The block search wrote a trailing row or column of motion vectors outside the flow image on
   any pyramid level whose size is not a multiple of sixteen, which is most of them once the

@@ -36,6 +36,7 @@ layout(push_constant) uniform Params {
     int transfer_function; // FidelityFX backbuffer transfer function: 0 SDR as is, 2 scRGB
     float min_luminance;   // scRGB only, nits
     float max_luminance;
+    int luma_half;         // 1: the luma is half the frame, one texel per 2x2 block
 } p;
 
 // ffx_opticalflow_prepare_luma.h: LuminanceToPerceivedLuminance.
@@ -44,14 +45,8 @@ float perceived(float y)
     return (y <= 216.0 / 24389.0 ? y * (24389.0 / 27.0) : pow(y, 1.0 / 3.0) * 116.0 - 16.0) * 0.01;
 }
 
-void main()
+uint luma_of(vec4 c)
 {
-    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
-    if (pix.x >= p.size.x || pix.y >= p.size.y)
-        return;
-    vec4 c = texelFetch(u_src, pix, 0);
-    imageStore(u_colour, pix, c);
-
     const vec3 rec709 = vec3(0.2126, 0.7152, 0.0722);
     float y;
     if (p.transfer_function == 2) {
@@ -61,5 +56,44 @@ void main()
     } else {
         y = dot(c.rgb, rec709);
     }
-    imageStore(u_luma, pix, uvec4(uint(y * 255.0), 0u, 0u, 0u));
+    return uint(y * 255.0);
+}
+
+void main()
+{
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+
+    if (p.luma_half == 0) {
+        if (id.x >= p.size.x || id.y >= p.size.y)
+            return;
+        vec4 c = texelFetch(u_src, id, 0);
+        imageStore(u_colour, id, c);
+        imageStore(u_luma, id, uvec4(luma_of(c), 0u, 0u, 0u));
+        return;
+    }
+
+    /* Performance mode: the colour ring stays at frame size for the interpolator, the luma comes
+     * out at half. One invocation owns a 2x2 block, so the frame is still read once, and the
+     * luma texel is taken from the block's average, as the downscale-then-luma path it replaces
+     * did with a linear filter. */
+    ivec2 luma_size = (p.size + 1) / 2;
+    if (id.x >= luma_size.x || id.y >= luma_size.y)
+        return;
+    ivec2 base = id * 2;
+    vec4 sum = vec4(0.0);
+    float taken = 0.0;
+    for (int dy = 0; dy < 2; dy++) {
+        for (int dx = 0; dx < 2; dx++) {
+            ivec2 pix = base + ivec2(dx, dy);
+            if (pix.x >= p.size.x || pix.y >= p.size.y)
+                continue;
+            vec4 c = texelFetch(u_src, pix, 0);
+            imageStore(u_colour, pix, c);
+            sum += c;
+            taken += 1.0;
+        }
+    }
+    if (taken == 0.0)
+        return;
+    imageStore(u_luma, id, uvec4(luma_of(sum / taken), 0u, 0u, 0u));
 }

@@ -189,7 +189,14 @@ enable_testing()
 # disabled for the tests, except the device selector MESA_VK_DEVICE_SELECT needs.
 set(AFMF_TEST_LOADER_ENV "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1;VK_LOADER_LAYERS_DISABLE=~implicit~;VK_LOADER_LAYERS_ENABLE=VK_LAYER_MESA_device_select")
 
-add_executable(afmf_headless tests/headless.c)
+add_executable(afmf_headless
+    tests/headless.c
+    tests/headless_checks.c
+    tests/headless_device.c
+    tests/headless_frame.c
+    tests/headless_instance.c
+    tests/headless_swapchain.c
+)
 target_link_libraries(afmf_headless PRIVATE Vulkan::Vulkan)
 target_compile_definitions(afmf_headless PRIVATE _POSIX_C_SOURCE=200809L)
 target_compile_options(afmf_headless PRIVATE ${AFMF_WARNINGS})

@@ -290,14 +290,15 @@ void ComputeOpticalFlowAdvanced(FfxInt32x2 iGlobalId, FfxInt32x2 iLocalId, FfxIn
     FfxInt32x2 pixelGroupOffset = iGroupId << 4u;
 
 #if FFX_LOCAL_SEARCH_FALLBACK == 1
-    // afmf-linux: the four blocks' SAD at their predicted vector (zero at the coarsest level),
-    // all at once before the loop: every lane already belongs to one block, so it loads that
-    // block's vector, compares its four pixels against the previous frame there, and one wave
-    // sum per block gives the block's SAD. A block at or under the threshold keeps its
-    // prediction and skips the 256-candidate search below. The sums are uniform across the
-    // group, so the branches in the loop are too; the barriers keep one sum's cross-wave read
-    // clear of the next one's write.
+    // afmf-linux: for each of the four blocks, its SAD at the vector predicted by the coarser
+    // level (zero at the coarsest) and its SAD where it already is, all before the loop: every
+    // lane belongs to one block, so it compares its four pixels against the previous frame at
+    // both places, and one wave sum per block gives the block's two sums. The loop below uses
+    // them to decide whether the block may skip its 256-candidate search. The sums are uniform
+    // across the group, so the branches in the loop are too; the barriers keep one sum's
+    // cross-wave read clear of the next one's write.
     FfxUInt32 predictedSad[4] = {0u, 0u, 0u, 0u};
+    FfxUInt32 restSad[4] = {0u, 0u, 0u, 0u};
     if (afmfStaticBlockSad != 0u)
     {
         FfxInt32x2 laneBlock = FfxInt32x2(iLaneToBlockId & 1, iLaneToBlockId >> 1);
@@ -305,9 +306,14 @@ void ComputeOpticalFlowAdvanced(FfxInt32x2 iGlobalId, FfxInt32x2 iLocalId, FfxIn
         FfxUInt32 laneSad = (laneVector.x != 0 || laneVector.y != 0)
             ? Sad(packedLuma_4blocks, LoadSecondImagePackedLuma(iPxPos + laneVector))
             : sad_4blocks;
+        // Both sums travel in one: a lane's SAD over its four pixels is at most 4 * 255, so a
+        // block's 64 lanes reach 65280 and each half stays inside its 16 bits.
+        FfxUInt32 lanePair = laneSad | (sad_4blocks << 16u);
         for (FfxInt32 b = 0; b < 4; b++)
         {
-            predictedSad[b] = BlockSad64(laneSad, iLocalIndex, iLaneToBlockId, b);
+            FfxUInt32 pair = BlockSad64(lanePair, iLocalIndex, iLaneToBlockId, b);
+            predictedSad[b] = pair & 0xffffu;
+            restSad[b] = pair >> 16u;
             FFX_GROUP_MEMORY_BARRIER;
         }
     }
@@ -325,10 +331,22 @@ void ComputeOpticalFlowAdvanced(FfxInt32x2 iGlobalId, FfxInt32x2 iLocalId, FfxIn
             }
 
 #if FFX_LOCAL_SEARCH_FALLBACK == 1
-            // afmf-linux: the prediction already matches; nothing to search.
-            if (afmfStaticBlockSad != 0u && predictedSad[blockId.x + blockId.y * 2] <= afmfStaticBlockSad)
+            // afmf-linux: a block can skip its search two ways, and both need evidence. If it
+            // matches the previous frame where it already is, it did not move: vector zero, and
+            // the prediction is dropped. Otherwise the prediction is kept only when it matches
+            // *and* is clearly better than not moving at all; without that second test a
+            // textureless block (fog, snow, sky), where every candidate matches equally well,
+            // keeps whatever vector the coarser level handed down and passes the mistake on.
+            FfxInt32 blockIndex = blockId.x + blockId.y * 2;
+            if (afmfStaticBlockSad != 0u && predictedSad[blockIndex] <= afmfStaticBlockSad &&
+                predictedSad[blockIndex] * 2u <= restSad[blockIndex])
             {
                 StoreOpticalFlow(ofGroupOffset + blockId, currentVector);
+                continue;
+            }
+            if (afmfStaticBlockSad != 0u && restSad[blockIndex] <= afmfStaticBlockSad)
+            {
+                StoreOpticalFlow(ofGroupOffset + blockId, FfxInt32x2(0, 0));
                 continue;
             }
 #endif //FFX_LOCAL_SEARCH_FALLBACK

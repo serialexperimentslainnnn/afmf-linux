@@ -81,10 +81,13 @@ static void init(void)
     long acquire_timeout_us = 0;
     long interpolate = 1;
     /* ADLX search mode: standard keeps the search to 5 pyramid levels (+-128 px), high uses all 7
-     * (+-512 px); auto lets the flow resolution decide (framegen.c). */
-    long search_mode = AFMF_SEARCH_HIGH;
+     * (+-512 px); auto lets the flow resolution decide (framegen.c), which at half resolution is
+     * 5 levels, still +-256 px of motion on screen between two frames. */
+    long search_mode = AFMF_SEARCH_AUTO;
     long fast_motion = AFMF_RESPONSE_BLENDED_FRAMES;
-    long performance = AFMF_PERFORMANCE_QUALITY;
+    /* The flow at half resolution from 1440p up, where the search dominates the frame's cost and
+     * a game is most likely to be saturating the GPU already; full resolution below it. */
+    long performance = AFMF_PERFORMANCE_AUTO;
     long profile = 0;
     long async = 1;
     /* Pacing holds the real frame back by half a frame time so the generated one lands halfway,

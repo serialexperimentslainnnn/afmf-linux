@@ -7,6 +7,12 @@ All notable changes to afmf-linux are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- The defaults ask for less of the GPU, which is where the frame rate goes when a game already
+  saturates it: `AFMF_PERFORMANCE_MODE` is `auto` (the optical flow at half resolution from
+  2560x1440 up, display resolution below it) and `AFMF_SEARCH_MODE` is `auto` (five pyramid
+  levels when the flow runs at half resolution, which still covers 256 pixels of motion on
+  screen between two frames). At 3440x1440 that is 716 us per generated frame before and 578
+  after. `AFMF_PERFORMANCE_MODE=quality AFMF_SEARCH_MODE=high` restores the previous behaviour.
 - `AFMF_PERFORMANCE_MODE=performance` reads the game's frame once, as full resolution already
   did: the ingest pass writes the colour ring at frame size and the luma at the flow's size in
   the same pass. It used to copy the whole frame, downscale the copy and take the luma from it,

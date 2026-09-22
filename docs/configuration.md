@@ -13,8 +13,8 @@ names mirror the settings AMD exposes for AFMF on Windows where such a setting e
 | `AFMF_ENABLE` | unset | `1` loads the layer |
 | `DISABLE_AFMF` | unset | `1` keeps it out even when enabled |
 | `AFMF_LOG` | `0` | `0` errors, `1` warnings, `2` info, `3` debug, all on stderr |
-| `AFMF_PERFORMANCE_MODE` | `quality` | `quality`: optical flow at display resolution (8 px blocks). `performance`: at half resolution (16 px blocks), about 2.5x cheaper. `auto`: `performance` from 2560x1440 up |
-| `AFMF_SEARCH_MODE` | `high` | `standard`: 5 pyramid levels. `high`: 7 levels, motion up to +-512 flow pixels. `auto`: 7 at full resolution, 5 at half |
+| `AFMF_PERFORMANCE_MODE` | `auto` | `auto`: `performance` from 2560x1440 up, `quality` below. `quality`: optical flow at display resolution (8 px blocks). `performance`: at half resolution (16 px blocks) |
+| `AFMF_SEARCH_MODE` | `auto` | `auto`: 7 pyramid levels at full flow resolution, 5 at half (+-256 px of motion on screen). `standard`: 5 levels. `high`: 7 levels always, motion up to +-512 flow pixels |
 | `AFMF_FAST_MOTION_RESPONSE` | `blend` | What to show where the flow is unreliable: `repeat` the previous frame, or `blend` both |
 | `AFMF_GAMESCOPE` | unset | `1` when the game runs under Gamescope (Steam Deck, or `gamescope -- <game>`): five extra images instead of two, and the layer passes through in the gamescope process itself |
 | `AFMF_EXTRA_IMAGES` | `2` (`5` with `AFMF_GAMESCOPE=1`) | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory; some engines abort above 8 images in total (id Tech 8) |
@@ -35,9 +35,11 @@ names mirror the settings AMD exposes for AFMF on Windows where such a setting e
 
 ## Presets
 
-**Default** (what AMD calls quality search, repeat): `AFMF_ENABLE=1`.
+**Default**: `AFMF_ENABLE=1`. The flow runs at half resolution from 1440p up, which is where a
+game is most likely to be saturating the GPU already.
 
-**AMD "high search, blend"**: `AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=blend`.
+**Every pixel of the flow**, at about a quarter more GPU cost per generated frame:
+`AFMF_ENABLE=1 AFMF_PERFORMANCE_MODE=quality AFMF_SEARCH_MODE=high`.
 
 **Without pacing** (uneven cadence, the compositor may drop generated frames above the refresh
 rate): add `AFMF_PACING=0`.

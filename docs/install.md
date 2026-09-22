@@ -69,10 +69,10 @@ Any other launcher: put `AFMF_ENABLE=1` in the game's environment. `DISABLE_AFMF
 layer out of a process even when enabled, which is the quickest way to measure the base frame
 rate.
 
-The settings closest to AMD's "high search, blend" preset, with the log on:
+Every pixel of the flow, at about a quarter more GPU cost per generated frame, with the log on:
 
 ```
-AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=blend AFMF_LOG=2 %command% 2>afmf.log
+AFMF_ENABLE=1 AFMF_PERFORMANCE_MODE=quality AFMF_SEARCH_MODE=high AFMF_LOG=2 %command% 2>afmf.log
 ```
 
 The log says what the layer decided for each swapchain; with `AFMF_PROFILE=1` it also reports

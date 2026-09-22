@@ -138,8 +138,8 @@ Windows (search mode, performance mode, fast motion response) where such a setti
 | `AFMF_ENABLE` | unset | `1` loads the layer |
 | `DISABLE_AFMF` | unset | `1` keeps it out even when enabled |
 | `AFMF_LOG` | `0` | `0` errors, `1` warnings, `2` info, `3` debug, all on stderr |
-| `AFMF_PERFORMANCE_MODE` | `quality` | `quality`: optical flow at display resolution (8 px blocks). `performance`: at half resolution (16 px blocks), about 2.5x cheaper. `auto`: `performance` from 2560x1440 up |
-| `AFMF_SEARCH_MODE` | `high` | `standard`: 5 pyramid levels. `high`: 7 levels, motion up to +-512 flow pixels. `auto`: 7 at full resolution, 5 at half |
+| `AFMF_PERFORMANCE_MODE` | `auto` | `auto`: `performance` from 2560x1440 up, `quality` below. `quality`: optical flow at display resolution (8 px blocks). `performance`: at half resolution (16 px blocks) |
+| `AFMF_SEARCH_MODE` | `auto` | `auto`: 7 pyramid levels at full flow resolution, 5 at half (+-256 px of motion on screen). `standard`: 5 levels. `high`: 7 levels always, motion up to +-512 flow pixels |
 | `AFMF_FAST_MOTION_RESPONSE` | `blend` | What to show where the flow is unreliable: `repeat` the previous frame, or `blend` both |
 | `AFMF_GAMESCOPE` | unset | `1` when the game runs under Gamescope (Steam Deck, or `gamescope -- <game>`): five extra images instead of two, and the layer passes through in the gamescope process itself |
 | `AFMF_EXTRA_IMAGES` | `2` (`5` with `AFMF_GAMESCOPE=1`) | Swapchain images added beyond what the application asked for (1..8). Fewer means more presents without a companion; more means more memory; some engines abort above 8 images in total (id Tech 8) |
@@ -152,16 +152,16 @@ Windows (search mode, performance mode, fast motion response) where such a setti
 | `AFMF_STATIC_BLOCK_SAD` | `128` | A block whose 64 pixels differ from the previous frame's at rest by no more than this (sum of absolute 8-bit luma differences) is static: vector 0, search skipped. `0` searches every block |
 | `AFMF_DIRECT_INGEST` | `1` | The game's frame is read once, straight from its swapchain image, into the layer's colour ring and the flow's luma (the previous release copied it, then computed the luma from the copy). Puts sampled usage on the game's swapchain images; `0` puts the copy back. Not for sRGB swapchains (the copy path stays there) |
 | `AFMF_SAD_INT16` | `1` | The block search sums its pixel differences on packed 16-bit pairs (two per instruction; needs `shaderInt16`, which the layer enables on the device when the game did not). `0` keeps the SDK's byte-at-a-time sum |
-| `AFMF_DIRECT_OUTPUT` | `0` | `1` writes the interpolated frame straight into the swapchain image instead of copying it there (saves the copy, 33 us at 3440x1440), which puts storage usage on the game's swapchain images; that can cost the game's own rendering more than it saves, so measure it per game. Needs a format that takes storage writes (not sRGB) |
+| `AFMF_DIRECT_OUTPUT` | `0` | `1` writes the interpolated frame straight into the swapchain image instead of copying it there (saves the copy, 44-59 us at 3440x1440), which puts storage usage on the game's swapchain images; that can cost the game's own rendering more than it saves, so measure it per game. Needs a format that takes storage writes (not sRGB) |
 | `AFMF_HUD_DETECT` | `1` | A pixel that is the same in both frames (within one 8-bit level) while its block moves is a static overlay (HUD, crosshair, subtitles): it is kept instead of warped. `0` warps everything |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_PROFILE` | `0` | `1` logs GPU time per stage every 300 frames and at teardown |
 | `AFMF_DUMP_DIR` | unset | Writes four generated frames (the companions of real frames 8-11, after the flow's warm-up) into that directory as `afmf_generated_<frame>.ppm`, with the block flow as `afmf_flow_<frame>.txt` (`vx vy` per block, `prev = cur + v`) and a log line with the luma and flow statistics. 8-bit formats only |
 
-Example, the settings closest to AMD's "high search, blend":
+Example, every pixel of the flow at about a quarter more GPU cost per generated frame:
 
 ```sh
-AFMF_ENABLE=1 AFMF_SEARCH_MODE=high AFMF_FAST_MOTION_RESPONSE=blend <game>
+AFMF_ENABLE=1 AFMF_PERFORMANCE_MODE=quality AFMF_SEARCH_MODE=high <game>
 ```
 
 ## Limitations

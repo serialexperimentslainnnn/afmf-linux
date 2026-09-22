@@ -12,31 +12,36 @@ stated. Re-measure on your hardware; the method is the same.
 
 ## What a frame costs
 
-GPU, per generated frame, with the defaults (optical flow at display resolution, all seven
+GPU, per generated frame, with the defaults (at this resolution: optical flow at half size, five
 pyramid levels), on the worst case the headless test has: a textured picture panning across the
 whole frame at 3440&times;1440, every block moving (the host paints it, so the GPU sits at low
 clocks; a game runs it faster):
 
 | Stage | Time |
 |---|---|
-| Ingest (one read of the game's frame into the colour ring and the luma) | 144-166 &micro;s |
-| Pyramid and scene-change detector histogram, side by side | 46-54 &micro;s |
-| Block search (FidelityFX Optical Flow, 7 levels; packed 16-bit SAD; blocks whose coarser-level vector already matches skip it) | 267-282 &micro;s |
-| Filter and scale | 112-119 &micro;s |
-| Interpolation | 65-81 &micro;s |
-| Output copy | 44-59 &micro;s (0 with `AFMF_DIRECT_OUTPUT=1`) |
-| **Total** | **700-760 &micro;s** |
+| Ingest (one read of the game's frame into the colour ring and the luma) | 112-138 &micro;s |
+| Luma preparation | 1 &micro;s (the ingest wrote it) |
+| Pyramid and scene-change detector histogram, side by side | 20-21 &micro;s |
+| Block search (FidelityFX Optical Flow, 5 levels; packed 16-bit SAD; blocks whose coarser-level vector already matches skip it) | 214-219 &micro;s |
+| Filter and scale | 94-111 &micro;s |
+| Interpolation | 67-77 &micro;s |
+| Output copy | 47-62 &micro;s (0 with `AFMF_DIRECT_OUTPUT=1`) |
+| **Total** | **560-610 &micro;s** |
 
-What keeps the full-resolution search with all seven levels at that cost: the sum of absolute
-differences runs on packed 16-bit pairs (`AFMF_SAD_INT16`, about a third of the ALU work per
-candidate; the search takes 410 &micro;s without it) and a block whose vector from the coarser
-level already matches keeps it instead of searching 256 candidates again
-(`AFMF_STATIC_BLOCK_SAD`; without it the same search takes 1.5 ms, and a game's share of still
-blocks decides its gain). On the headless test's still picture the whole frame is 367-424
-&micro;s, and 409-432 with the flow at half resolution (`AFMF_PERFORMANCE_MODE=performance`),
-whose coarser blocks skip fewer searches. All of it runs on a compute queue of the layer's own (or the game's last compute
-queue when the game took them all, as vkd3d-proton does), so it competes for the GPU but never
-sits in the game's queue.
+The same scene with the optical flow at display resolution and all seven pyramid levels
+(`AFMF_PERFORMANCE_MODE=quality AFMF_SEARCH_MODE=high`) costs **674-716 &micro;s**: about a
+quarter more for a flow whose extra detail a moving picture does not show.
+
+What keeps the search at that cost: the sum of absolute differences runs on packed 16-bit pairs
+(`AFMF_SAD_INT16`, about a third of the ALU work per candidate; the search takes 410 &micro;s
+without it at display resolution) and a block whose vector from the coarser level already matches
+keeps it instead of searching 256 candidates again (`AFMF_STATIC_BLOCK_SAD`; without it the same
+search takes 1.5 ms, and a game's share of still blocks decides its gain). The frame is read
+once whatever the flow resolution: the ingest pass writes the colour ring at frame size and the
+luma at the flow's size in the same pass, so half resolution costs no copy and no downscale
+(`AFMF_DIRECT_INGEST=0` puts those back, and about 20 &micro;s with them). All of it runs on a
+compute queue of the layer's own (or the game's last compute queue when the game took them all,
+as vkd3d-proton does), so it competes for the GPU but never sits in the game's queue.
 
 Host, on the game's thread, per present: **11 &micro;s under the validation layer** in the
 headless test: the hook only consumes the game's semaphores and queues the frame. The slot's
@@ -92,10 +97,9 @@ Same code, same tests (validation, golden check in both modes, sanitizers), same
 vkcube and in a game. What differs is the cost: at 3440&times;1440 with the flow at half
 resolution (`AFMF_PERFORMANCE_MODE=performance`), **1,070 &micro;s** per frame in the headless
 test and **1,245 &micro;s** in game with seven pyramid levels, about three times the RX 9070 XT.
-The reads and writes of the swapchain images weigh much more than on RDNA4. Use
-`AFMF_PERFORMANCE_MODE=performance` and `AFMF_SEARCH_MODE=auto` (5 levels, about 90 &micro;s
-less) on this generation, and expect the 2&times; to fall short sooner when the game saturates
-the GPU.
+The reads and writes of the swapchain images weigh much more than on RDNA4, which is what the
+defaults now spare it: half resolution and five levels from 1440p up. Expect the 2&times; to fall
+short sooner when the game saturates the GPU.
 
 ## Not compatible with other frame generation layers or injectors
 

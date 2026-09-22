@@ -313,6 +313,29 @@ set_tests_properties(headless_fog PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 120
 )
+# The first cost gate: the full-frame pan at the resolution the register measures, with a ceiling
+# on the wall time per present. The figure carries the test's own upload and a queue drain, so
+# the ceiling sits at twice what a healthy build takes: it catches the change that doubles the
+# layer's GPU work, not a few per cent. The per-stage GPU numbers are in the profile lines.
+add_test(NAME headless_cost COMMAND afmf_headless)
+set_tests_properties(headless_cost PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=2;AFMF_PROFILE=1;AFMF_TEST_PAN=1;AFMF_TEST_EXTENT=3440x1440;AFMF_TEST_FRAMES=400;AFMF_TEST_MAX_MS=32;AFMF_GOVERNOR=0;AFMF_ACQUIRE_TIMEOUT_US=16000;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "presented 400 frames through"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 120
+)
+# Smoothness: a game at 8 ms with a stutter of 40 ms every 25 frames, long enough for two of the
+# layer's cadence lines. No present may lose its companion over a hitch, and the governor, which
+# only reads how late the generated frame was, must be at step 0 in both lines.
+add_test(NAME headless_hitch COMMAND afmf_headless)
+set_tests_properties(headless_hitch PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=2;AFMF_PROFILE=1;AFMF_TEST_FRAME_MS=8;AFMF_TEST_HITCH=25;AFMF_TEST_FRAMES=600;AFMF_GOVERNOR=1;AFMF_ACQUIRE_TIMEOUT_US=16000;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "presented 600 frames through"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL| [1-9][0-9]* no free image|governor step [1-3]"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 120
+)
 add_test(NAME headless_present_mode_keep COMMAND afmf_headless)
 set_tests_properties(headless_present_mode_keep PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_PRESENT_MODE=keep;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"

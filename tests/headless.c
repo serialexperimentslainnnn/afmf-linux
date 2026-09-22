@@ -719,8 +719,20 @@ static bool present_frame(struct ctx *ctx, uint32_t frame)
         if (frame_ms < 0 || frame_ms > 1000)
             frame_ms = 0;
     }
+    /* AFMF_TEST_HITCH=<n>: one present in n takes five frame times instead of one, a stutter of
+     * the game's (not a loading pause, which the layer's cadence ignores past 250 ms). What it
+     * exercises is the pacing after a hitch: the hold must not run away, no present may lose
+     * its companion over it, and the governor must sit at step 0 once the hitches pass. */
+    static long hitch = -1;
+    if (hitch < 0) {
+        const char *wanted = getenv("AFMF_TEST_HITCH");
+        hitch = wanted != NULL ? strtol(wanted, NULL, 10) : 0;
+        if (hitch < 0 || hitch > 100000)
+            hitch = 0;
+    }
     if (frame_ms > 0) {
-        struct timespec pause = {.tv_sec = 0, .tv_nsec = frame_ms * 1000000L};
+        long ms = hitch > 0 && frame > 0 && frame % (uint32_t)hitch == 0 ? frame_ms * 5 : frame_ms;
+        struct timespec pause = {.tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000L};
         (void)nanosleep(&pause, NULL);
     }
     return true;

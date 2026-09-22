@@ -6,6 +6,16 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-09-22
+
+### Fixed
+- `AFMF_DUMP_DIR` creates the directory it names. It used to write nothing at all when the
+  directory did not exist yet, and say so only at warning level.
+- `AFMF_DUMP_DIR` also dumps 10-bit swapchains (`A2B10G10R10`), which is what games present in
+  HDR; only the two 8-bit formats were written before, and a format that cannot be dumped said
+  nothing. Every frame or flow file that cannot be written is now logged as an error with the
+  reason.
+
 ## [1.1.0] - 2026-09-21
 
 ### Fixed
@@ -171,7 +181,8 @@ First public release.
 - Headless integration test under the Khronos validation layer, vkcube smoke test, sanitizer
   build, GCC `-fanalyzer` and ShellCheck gates.
 
-[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/serialexperimentslainnnn/afmf-linux/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.1.1
 [1.1.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.1.0
 [1.0.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v1.0.0
 [0.4.0]: https://github.com/serialexperimentslainnnn/afmf-linux/releases/tag/v0.4.0

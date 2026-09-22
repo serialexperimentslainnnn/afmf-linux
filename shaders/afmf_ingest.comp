@@ -52,11 +52,12 @@ uint luma_of(vec4 c)
     if (p.transfer_function == 2) {
         vec3 linear = (c.rgb - vec3(p.min_luminance / 80.0)) /
                       vec3((p.max_luminance - p.min_luminance) / 80.0);
-        y = perceived(dot(linear, rec709));
+        y = perceived(max(dot(linear, rec709), 0.0)); /* scRGB goes below zero out of gamut */
     } else {
         y = dot(c.rgb, rec709);
     }
-    return uint(y * 255.0);
+    /* Above 1.0 (more than the peak) the r8ui store would wrap and a bright pixel come out dark. */
+    return uint(clamp(y, 0.0, 1.0) * 255.0);
 }
 
 void main()

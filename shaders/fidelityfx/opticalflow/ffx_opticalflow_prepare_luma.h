@@ -90,15 +90,16 @@ void PrepareLuma(FfxInt32x2 iGlobalId, FfxInt32 iLocalIndex)
             else if (backbufferTransferFunction == 1)
             {
                 fY = PQCorrectedHdrToLuminance(inputColor, MinMaxLuminance()[1]);
-                fY = LuminanceToPerceivedLuminance(fY);
+                fY = LuminanceToPerceivedLuminance(max(fY, 0.0)); // afmf-linux: no cube root of a negative
             }
             else if (backbufferTransferFunction == 2)
             {
                 fY = SCRGBCorrectedHdrToLuminance(inputColor, MinMaxLuminance()[0], MinMaxLuminance()[1]);
-                fY = LuminanceToPerceivedLuminance(fY);
+                fY = LuminanceToPerceivedLuminance(max(fY, 0.0)); // afmf-linux: scRGB goes below zero out of gamut
             }
 
-            StoreOpticalFlowInput(pos, FfxUInt32(fY * 255));
+            // afmf-linux: above the peak the r8ui store would wrap and a bright pixel come out dark.
+            StoreOpticalFlowInput(pos, FfxUInt32(clamp(fY, 0.0, 1.0) * 255));
         }
     }
 }

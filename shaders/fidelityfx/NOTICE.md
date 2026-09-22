@@ -30,6 +30,10 @@ Local edits, every line of them marked `afmf-linux:`:
   fallback only computes its sum at level 0. The cross-subgroup sum and minimum combine
   `gl_NumSubgroups` partials through shared memory instead of exactly two of 32 lanes, so the
   result is uniform across the group on every subgroup size (ANV picks 8 or 16).
+- `opticalflow/ffx_opticalflow_prepare_luma.h`: the HDR luma is clamped to [0, 1] before it
+  is stored as a byte, and the perceived-luminance cube root never sees a negative input
+  (scRGB carries components outside the Rec.709 gamut). The SDK stored `fY * 255` as is, so a
+  pixel brighter than the peak wrapped to a dark value.
 - `opticalflow/ffx_opticalflow_callbacks_glsl.h`: `StoreOpticalFlow` drops a write outside the
   flow image. The search dispatches one group per 2x2 block neighbourhood, so a level whose size
   is not a multiple of 16 has a trailing row or column of blocks that do not exist.

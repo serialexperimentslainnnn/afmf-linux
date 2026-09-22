@@ -3,7 +3,7 @@
 %global layer_dir %{_datadir}/vulkan/implicit_layer.d
 
 Name:           afmf-linux
-Version:        1.2.0
+Version:        1.3.0
 Release:        1%{?dist}
 Summary:        AMD Fluid Motion Frames for Linux: Vulkan frame generation layer
 License:        MIT
@@ -42,6 +42,14 @@ DXVK and vkd3d-proton titles under Proton. Dormant until AFMF_ENABLE=1 is set fo
 %{layer_dir}/afmf-linux.json
 
 %changelog
+* Tue Sep 22 2026 Lain <lain@digitalexperiments.dev> - 1.3.0-1
+- The optical flow and the block search follow the resolution by default instead of always
+  asking for the most: half resolution and five pyramid levels from 1440p up, 716 to 578 us
+  per generated frame at 3440x1440. AFMF_PERFORMANCE_MODE=quality AFMF_SEARCH_MODE=high keeps
+  the previous behaviour
+- Half resolution reads the game's frame once, as full resolution already did, instead of
+  copying it and downscaling the copy
+
 * Tue Sep 22 2026 Lain <lain@digitalexperiments.dev> - 1.2.0-1
 - The block search needs evidence before it keeps a vector: a block with no detail to match
   stores zero instead of the coarse level's guess, which is what smeared moving silhouettes

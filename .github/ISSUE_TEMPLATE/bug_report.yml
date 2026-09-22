@@ -12,7 +12,7 @@ body:
     attributes:
       label: afmf-linux version
       description: From the release you installed, or `git rev-parse --short HEAD`
-      placeholder: "1.2.0"
+      placeholder: "1.3.0"
     validations:
       required: true
   - type: textarea

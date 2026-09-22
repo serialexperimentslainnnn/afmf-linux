@@ -1,3 +1,16 @@
+afmf-linux (1.3.0-1) unstable; urgency=medium
+
+  * Changed: the optical flow and the block search follow the resolution by default instead of
+    always asking for the most. From 1440p up the flow runs at half resolution with five pyramid
+    levels, which costs 578 us per generated frame at 3440x1440 where the previous defaults cost
+    716. AFMF_PERFORMANCE_MODE=quality AFMF_SEARCH_MODE=high keeps the previous behaviour.
+  * Changed: at half resolution the game's frame is read once, as full resolution already did,
+    instead of being copied and the copy downscaled.
+  * Fixed: the block search no longer writes a row or column of motion vectors outside the flow
+    image on pyramid levels whose size is not a multiple of sixteen.
+
+ -- Lain <lain@digitalexperiments.dev>  Tue, 22 Sep 2026 20:15:00 +0200
+
 afmf-linux (1.2.0-1) unstable; urgency=medium
 
   * Fixed: the block search keeps a vector only with evidence behind it. A block whose picture

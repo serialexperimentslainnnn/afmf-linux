@@ -6,6 +6,8 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-22
+
 ### Changed
 - The defaults ask for less of the GPU, which is where the frame rate goes when a game already
   saturates it: `AFMF_PERFORMANCE_MODE` is `auto` (the optical flow at half resolution from

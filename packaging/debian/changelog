@@ -1,5 +1,8 @@
 afmf-linux (1.3.1-1) unstable; urgency=medium
 
+  * Fixed: no double image on fast camera motion. Motion is believed up to 128 pixels between
+    frames, and where the two warped samples disagree the blend leans on the current frame's
+    unmoved pixel, so an object the camera follows stays whole.
   * Fixed: device-level commands resolved through vkGetInstanceProcAddr are hooked only where
     the driver has them; a game submitting from several threads no longer serialises on the
     layer; the layer's queue is never protected; vkCreateDevice retries with the game's own

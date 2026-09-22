@@ -6,6 +6,8 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-22
+
 ### Fixed
 - Ghosting on fast camera motion: a pillar or a billboard passing the camera used to show a
   double edge. Motion is believed up to 128 pixels between frames instead of 64 (the search
@@ -14,10 +16,6 @@ All notable changes to afmf-linux are documented here. The format follows
   vector, a silhouette whose blocks carry the background's motion, a background uncovered from
   behind a passing object) the blend leans on the current frame's own unmoved pixel instead of
   drawing both: an object the camera follows stays whole.
-
-## [1.3.1] - 2026-09-22
-
-### Fixed
 - A device-level command resolved through `vkGetInstanceProcAddr` was hooked even when the
   driver below lacked it, so on a driver without core `vkQueueSubmit2` a game resolving it that
   way had every submission dropped. The instance route now answers as the device route does:

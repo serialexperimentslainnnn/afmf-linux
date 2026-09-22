@@ -43,6 +43,9 @@ DXVK and vkd3d-proton titles under Proton. Dormant until AFMF_ENABLE=1 is set fo
 
 %changelog
 * Tue Sep 22 2026 Lain <lain@digitalexperiments.dev> - 1.3.1-1
+- No double image on fast camera motion: motion is believed up to 128 pixels between frames,
+  and where the two warped samples disagree the blend leans on the current frame's unmoved
+  pixel, so an object the camera follows stays whole
 - Device-level commands resolved through vkGetInstanceProcAddr are hooked only where the
   driver has them; a game submitting from several threads no longer serialises on the layer;
   the layer's queue is never protected; vkCreateDevice retries with the game's own request

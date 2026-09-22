@@ -287,6 +287,12 @@ FfxInt32x2 LoadPreviousOpticalFlow(FfxInt32x2 iPxPos)
 #if defined(FFX_OPTICALFLOW_BIND_UAV_OPTICAL_FLOW)
 void StoreOpticalFlow(FfxInt32x2 iPxPos, FfxInt32x2 motionVector)
 {
+    // afmf-linux: the search dispatches whole 2x2 block neighbourhoods, so the last group of a
+    // afmf-linux: level whose size is not a multiple of 16 addresses a row or column past the
+    // afmf-linux: flow image; clip here rather than rely on out-of-range stores being discarded.
+    FfxInt32x2 flowSize = FfxInt32x2(imageSize(rw_optical_flow));
+    if (iPxPos.x >= flowSize.x || iPxPos.y >= flowSize.y)
+        return;
     imageStore(rw_optical_flow, iPxPos, FfxInt32x4(motionVector, 0, 0));
 }
 #endif

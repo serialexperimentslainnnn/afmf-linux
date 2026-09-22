@@ -6,6 +6,12 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- The block search wrote a trailing row or column of motion vectors outside the flow image on
+  any pyramid level whose size is not a multiple of sixteen, which is most of them once the
+  optical flow runs below full resolution. The driver discarded the write, so nothing was
+  corrupted; the store clips now.
+
 ## [1.2.0] - 2026-09-22
 
 ### Fixed

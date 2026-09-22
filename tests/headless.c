@@ -68,11 +68,14 @@ struct ctx {
     VkDeviceMemory staging_memory;
     uint8_t *staging_mapped;
     uint32_t validation_errors;
+    uint32_t frames; /* what the run actually presented, which AFMF_TEST_FRAMES may have changed */
     int present_id; /* AFMF_TEST_PRESENT_ID: 0 none, 1 VK_KHR_present_id, 2 VK_KHR_present_id2 */
     bool present_modes; /* AFMF_TEST_PRESENT_MODES=1: VK_EXT_swapchain_maintenance1 mode list and per-present mode, FIFO */
 };
 
 static void destroy(struct ctx *ctx);
+static bool create_swapchain(struct ctx *ctx, uint32_t width, uint32_t height);
+static void destroy_swapchain(struct ctx *ctx);
 
 static int wanted_present_id(void)
 {
@@ -196,8 +199,21 @@ static bool create_instance(struct ctx *ctx, bool with_validation)
         .pApplicationName = "afmf_headless",
         .apiVersion = VK_API_VERSION_1_1,
     };
+    /* AFMF_TEST_GPUAV=1 asks the validation layer to instrument the shaders themselves, which
+     * is the only way to see a read or a write of theirs leave its buffer. It is asked for here
+     * rather than through the layer's own settings, which differ between its versions, and it
+     * makes the run slow enough that only its own test uses it. */
+    VkValidationFeatureEnableEXT gpu_assisted[] = {VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT};
+    VkValidationFeaturesEXT features = {
+        .sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
+        .enabledValidationFeatureCount = 1,
+        .pEnabledValidationFeatures = gpu_assisted,
+    };
+    const char *gpuav = getenv("AFMF_TEST_GPUAV");
+    bool with_gpuav = with_validation && gpuav != NULL && gpuav[0] == '1';
     VkInstanceCreateInfo info = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .pNext = with_gpuav ? &features : NULL,
         .pApplicationInfo = &app,
         .enabledLayerCount = with_validation ? 2u : 1u,
         .ppEnabledLayerNames = layers,
@@ -394,6 +410,32 @@ static bool create_device_and_swapchain(struct ctx *ctx)
     CHECK(vkCreateDevice(ctx->physical_device, &device, NULL, &ctx->device));
     vkGetDeviceQueue(ctx->device, ctx->queue_family, 0, &ctx->queue);
 
+    VkCommandPoolCreateInfo pool = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = ctx->queue_family,
+    };
+    CHECK(vkCreateCommandPool(ctx->device, &pool, NULL, &ctx->command_pool));
+    VkCommandBufferAllocateInfo alloc_cmd = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = ctx->command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+    CHECK(vkAllocateCommandBuffers(ctx->device, &alloc_cmd, &ctx->command_buffer));
+
+    VkSemaphoreCreateInfo semaphore = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    CHECK(vkCreateSemaphore(ctx->device, &semaphore, NULL, &ctx->acquired));
+    CHECK(vkCreateSemaphore(ctx->device, &semaphore, NULL, &ctx->ready));
+
+    return create_swapchain(ctx, 0, 0);
+}
+
+/* The swapchain and the staging buffer that feeds it, apart from the device so that a run can
+ * take them down and build them again at another resolution, as a game does on a window change.
+ * Zero for the size asks for the default (or AFMF_TEST_EXTENT). */
+static bool create_swapchain(struct ctx *ctx, uint32_t width, uint32_t height)
+{
     VkSurfaceCapabilitiesKHR caps;
     CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(ctx->physical_device, ctx->surface, &caps));
     uint32_t format_count = 1;
@@ -414,6 +456,10 @@ static bool create_device_and_swapchain(struct ctx *ctx)
             w <= 8192 && h <= 8192) {
             extent.width = w;
             extent.height = h;
+        }
+        if (width >= 128 && height >= 128) { /* a resolution this run asked for */
+            extent.width = width;
+            extent.height = height;
         }
     }
     uint32_t image_count = caps.minImageCount + 1;
@@ -455,24 +501,6 @@ static bool create_device_and_swapchain(struct ctx *ctx)
         (void)fprintf(stderr, "expected at least %u images\n", image_count + (uint32_t)expected);
         return false;
     }
-
-    VkCommandPoolCreateInfo pool = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-        .queueFamilyIndex = ctx->queue_family,
-    };
-    CHECK(vkCreateCommandPool(ctx->device, &pool, NULL, &ctx->command_pool));
-    VkCommandBufferAllocateInfo alloc = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = ctx->command_pool,
-        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1,
-    };
-    CHECK(vkAllocateCommandBuffers(ctx->device, &alloc, &ctx->command_buffer));
-
-    VkSemaphoreCreateInfo semaphore = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    CHECK(vkCreateSemaphore(ctx->device, &semaphore, NULL, &ctx->acquired));
-    CHECK(vkCreateSemaphore(ctx->device, &semaphore, NULL, &ctx->ready));
 
     /* Host-visible staging for the synthetic frames (RGBA8 or BGRA8: 4 bytes per pixel). */
     ctx->extent = extent;
@@ -711,6 +739,24 @@ static void destroy(struct ctx *ctx)
     }
 }
 
+/* Everything create_swapchain made, in reverse. The device and its queue stay. */
+static void destroy_swapchain(struct ctx *ctx)
+{
+    (void)vkDeviceWaitIdle(ctx->device);
+    if (ctx->staging_mapped != NULL)
+        vkUnmapMemory(ctx->device, ctx->staging_memory);
+    ctx->staging_mapped = NULL;
+    if (ctx->staging != VK_NULL_HANDLE)
+        vkDestroyBuffer(ctx->device, ctx->staging, NULL);
+    ctx->staging = VK_NULL_HANDLE;
+    if (ctx->staging_memory != VK_NULL_HANDLE)
+        vkFreeMemory(ctx->device, ctx->staging_memory, NULL);
+    ctx->staging_memory = VK_NULL_HANDLE;
+    if (ctx->swapchain != VK_NULL_HANDLE)
+        vkDestroySwapchainKHR(ctx->device, ctx->swapchain, NULL);
+    ctx->swapchain = VK_NULL_HANDLE;
+}
+
 static bool run(struct ctx *ctx)
 {
     bool with_validation = instance_layer_available(VALIDATION_LAYER_NAME);
@@ -728,11 +774,35 @@ static bool run(struct ctx *ctx)
         if (n >= 2 && n <= 100000)
             frames = (uint32_t)n;
     }
+    ctx->frames = frames;
+    /* AFMF_TEST_RECREATE=<n>: every n frames the swapchain goes down and comes back at another
+     * resolution, which is what a game does on a window or setting change and what a run of a
+     * fixed size never exercises: the layer has to take its frames apart and build them again
+     * while its own threads are still working. */
+    uint32_t recreate = 0;
+    const char *churn = getenv("AFMF_TEST_RECREATE");
+    if (churn != NULL) {
+        long n = strtol(churn, NULL, 10);
+        if (n >= 2 && n <= 100000)
+            recreate = (uint32_t)n;
+    }
+    static const VkExtent2D sizes[] = {{640, 480}, {800, 600}, {1280, 720}};
+    uint32_t size_index = 0;
+
     struct timespec start, end;
     (void)clock_gettime(CLOCK_MONOTONIC, &start);
-    for (uint32_t i = 0; i < frames; i++)
+    for (uint32_t i = 0; i < frames; i++) {
+        if (recreate != 0 && i != 0 && i % recreate == 0) {
+            size_index = (size_index + 1) % (uint32_t)(sizeof sizes / sizeof sizes[0]);
+            destroy_swapchain(ctx);
+            if (!create_swapchain(ctx, sizes[size_index].width, sizes[size_index].height))
+                return false;
+            (void)fprintf(stderr, "swapchain recreated at %ux%u after %u frames\n",
+                          ctx->extent.width, ctx->extent.height, i);
+        }
         if (!present_frame(ctx, i))
             return false;
+    }
     (void)clock_gettime(CLOCK_MONOTONIC, &end);
     double ms = ((double)(end.tv_sec - start.tv_sec) * 1e3 + (double)(end.tv_nsec - start.tv_nsec) / 1e6);
     (void)fprintf(stderr, "%ux%u: %.2f ms per present (upload + layer work, queue drained each frame)\n",
@@ -953,6 +1023,7 @@ int main(void)
     }
     /* "headless: FAIL" is what CTest's FAIL_REGULAR_EXPRESSION looks for: a pass regex on the
      * layer's report alone would let a failed golden check through. */
-    (void)fprintf(stderr, ok ? "presented %u frames through " LAYER_NAME "\n" : "headless: FAIL\n", FRAMES);
+    (void)fprintf(stderr, ok ? "presented %u frames through " LAYER_NAME "\n" : "headless: FAIL\n",
+                  ctx.frames);
     return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

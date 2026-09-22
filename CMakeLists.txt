@@ -320,6 +320,30 @@ set_tests_properties(headless_async_drain PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 60
 )
+# What a session looks like and the tests above never did: thousands of presents, and every 250
+# of them the swapchain goes down and comes back at another resolution while the layer's threads
+# are still working. Everything the layer allocated per swapchain is built and destroyed a dozen
+# times over, under the validation layer, which is where a use-after-free or a stale descriptor
+# shows up.
+add_test(NAME headless_soak COMMAND afmf_headless)
+set_tests_properties(headless_soak PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=2;AFMF_TEST_FRAMES=3000;AFMF_TEST_RECREATE=250;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=1;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "presented 3000 frames"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 300
+)
+# The validation layer instruments the shaders themselves: a read or a write of theirs that
+# leaves its buffer is reported instead of corrupting whatever sits next to it, which is the
+# shape a crash takes in a game and the shape no test above can see. Slow, so it runs short.
+add_test(NAME headless_gpuav COMMAND afmf_headless)
+set_tests_properties(headless_gpuav PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=2;AFMF_TEST_GPUAV=1;AFMF_TEST_PAN=1;AFMF_GOVERNOR=0;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "presented 120 frames through"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 300
+)
 
 if(AFMF_SANITIZE)
     foreach(target afmf-linux afmf_headless)

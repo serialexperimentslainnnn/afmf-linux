@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 
 #define AFMF_FLOW_BLOCK 8u
+#define AFMF_DUMP_FRAMES 4u
 /* The SDK's scene change detector reports a change for its first six frames and the search stores
  * zero vectors while it does: dumps start after that, or they show a plain blend. */
 #define AFMF_DUMP_FIRST 8u
@@ -839,13 +840,6 @@ static void dump_buffer_create(struct afmf_device *dev, struct afmf_framegen *fg
                  strerror(errno));
         return;
     }
-    uint32_t limit = afmf_config_get()->dump_frames;
-    double mb = (double)fg->extent.width * fg->extent.height * 3.0 / (1024.0 * 1024.0);
-    if (limit == 0u)
-        AFMF_WARN("dumping every generated frame to %s: %.0f MB each, and every one stalls on its"
-                  " submission", dir, mb);
-    else
-        AFMF_INFO("dumping %u generated frames to %s, %.0f MB each", limit, dir, mb);
 
     /* The generated frame, then the level-0 flow after the filter and straight from the search
      * (rg16i, one texel per block), the scene change detector's three words, and the level-0
@@ -980,8 +974,7 @@ static void profiler_begin(struct afmf_device *dev, struct afmf_framegen *fg, Vk
  * (one failed remove() per second) rather than watched. */
 void afmf_framegen_dump_arm(struct afmf_framegen *fg)
 {
-    uint32_t limit = afmf_config_get()->dump_frames;
-    if (fg->dump_mapped == NULL || limit == 0u || fg->dumps_written < limit ||
+    if (fg->dump_mapped == NULL || fg->dumps_written < AFMF_DUMP_FRAMES ||
         fg->frame_index % 60u != 0u)
         return;
     char path[512];
@@ -990,15 +983,14 @@ void afmf_framegen_dump_arm(struct afmf_framegen *fg)
         return;
     fg->dumps_written = 0;
     fg->dump_from = fg->frame_index + 1u;
-    AFMF_INFO("dump armed: the next %u generated frames go to %s", limit,
+    AFMF_INFO("dump armed: the next %u generated frames go to %s", AFMF_DUMP_FRAMES,
               afmf_config_get()->dump_dir);
 }
 
 bool afmf_framegen_dump_pending(const struct afmf_framegen *fg)
 {
-    uint32_t limit = afmf_config_get()->dump_frames;
     return fg->dump_mapped != NULL && fg->frame_index >= fg->dump_from &&
-           (limit == 0u || fg->dumps_written < limit);
+           fg->dumps_written < AFMF_DUMP_FRAMES;
 }
 
 bool afmf_framegen_dump_recorded(const struct afmf_framegen *fg)

@@ -41,8 +41,7 @@ struct afmf_config {
     bool passive;                /* AFMF_GAMESCOPE=1 and this process is Gamescope itself: pass-through */
     enum afmf_present_mode present_mode; /* AFMF_PRESENT_MODE: auto | keep */
     bool governor;               /* AFMF_GOVERNOR=0 keeps generating every frame however late the GPU runs */
-    uint32_t static_block_sad;
-    uint32_t dump_frames; /* generated frames AFMF_DUMP_DIR writes per swapchain; 0 = every one */   /* AFMF_STATIC_BLOCK_SAD: a block at rest under this SAD skips the search (0 = never) */
+    uint32_t static_block_sad;   /* AFMF_STATIC_BLOCK_SAD: a block at rest under this SAD skips the search (0 = never) */
     bool direct_output;          /* AFMF_DIRECT_OUTPUT=1: interpolate straight into the swapchain image (STORAGE usage on it) */
     bool hud_detect;             /* AFMF_HUD_DETECT: a pixel unchanged between the frames on a moving block is kept, not warped */
     bool direct_ingest;          /* AFMF_DIRECT_INGEST: sample the game's frame straight into the ring and luma (SAMPLED usage) */

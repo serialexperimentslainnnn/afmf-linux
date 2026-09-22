@@ -13,6 +13,6 @@ pkgbase = afmf-linux
 	makedepends = spirv-tools
 	depends = vulkan-icd-loader
 	source = afmf-linux-1.3.1.tar.gz::https://github.com/serialexperimentslainnnn/afmf-linux/archive/v1.3.1.tar.gz
-	sha256sums = SKIP
+	sha256sums = b4c2e54f660a4929afadecb6c5eaf1e381a23d3cc77705538e69a07500f143e0
 
 pkgname = afmf-linux

@@ -104,6 +104,17 @@ static bool wanted_pan(void)
     return v != NULL && v[0] == '1';
 }
 
+/* AFMF_TEST_FOG=1: the same scroll with almost no contrast, a soft gradient under noise of a
+ * couple of levels. It is the block search's worst case for cost: with no detail to match, every
+ * candidate of the 256 matches about as well as the rest, so the rules that let a block skip its
+ * search find no evidence and nearly every block searches. No vector is checked here, because in
+ * a picture without texture there is no right answer to check against. */
+static bool wanted_fog(void)
+{
+    const char *v = getenv("AFMF_TEST_FOG");
+    return v != NULL && v[0] == '1';
+}
+
 /* AFMF_TEST_NO_IDLE=1: no vkDeviceWaitIdle before teardown, where the layer drains its
  * threads; the swapchain is destroyed straight after the last present, with the frame still
  * queued to the work thread or held by the presentation thread, and its destruction has to
@@ -545,6 +556,23 @@ static uint32_t square_x(uint32_t frame)
 static void paint_frame(struct ctx *ctx, uint32_t frame)
 {
     uint32_t w = ctx->extent.width, h = ctx->extent.height;
+    if (wanted_fog()) {
+        uint32_t shift = frame * SQUARE_STEP;
+        for (uint32_t y = 0; y < h; y++) {
+            uint8_t *row = ctx->staging_mapped + (size_t)y * w * 4u;
+            for (uint32_t x = 0; x < w; x++) {
+                uint32_t sx = x + shift;
+                uint32_t base = 120u + (((sx + y) >> 9) & 3u);   /* a gradient of four levels */
+                uint32_t n = ((sx * 2654435761u) ^ (y * 2246822519u)) >> 30; /* 0..3 */
+                uint8_t v = (uint8_t)(base + n);
+                row[x * 4] = v;
+                row[x * 4 + 1] = v;
+                row[x * 4 + 2] = v;
+                row[x * 4 + 3] = 0xff;
+            }
+        }
+        return;
+    }
     if (wanted_pan()) {
         uint32_t shift = frame * SQUARE_STEP;
         for (uint32_t y = 0; y < h; y++) {
@@ -807,6 +835,20 @@ static bool run(struct ctx *ctx)
     double ms = ((double)(end.tv_sec - start.tv_sec) * 1e3 + (double)(end.tv_nsec - start.tv_nsec) / 1e6);
     (void)fprintf(stderr, "%ux%u: %.2f ms per present (upload + layer work, queue drained each frame)\n",
                   ctx->extent.width, ctx->extent.height, ms / frames);
+    /* AFMF_TEST_MAX_MS=<n>: a ceiling on that figure. It is a blunt instrument, since the figure
+     * carries this test's own upload and a queue drain per frame as well as the layer's work, so
+     * it is set with room to spare: what it is there to catch is the class of change that
+     * doubles the layer's GPU cost, which is the one a player feels. The layer's own per-stage
+     * breakdown (AFMF_LOG=2 AFMF_PROFILE=1) is the number to read when this fails. */
+    const char *ceiling = getenv("AFMF_TEST_MAX_MS");
+    if (ceiling != NULL) {
+        double max_ms = strtod(ceiling, NULL);
+        if (max_ms > 0.0 && ms / frames > max_ms) {
+            (void)fprintf(stderr, "headless: FAIL: %.2f ms per present is over the %.2f ms ceiling\n",
+                          ms / frames, max_ms);
+            return false;
+        }
+    }
     return true;
 }
 

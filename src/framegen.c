@@ -26,7 +26,9 @@
 /* The SDK's scene change detector reports a change for its first six frames and the search stores
  * zero vectors while it does: dumps start after that, or they show a plain blend. */
 #define AFMF_DUMP_FIRST 8u
-#define AFMF_PROFILE_QUERIES 32u  /* timestamps per slot: one at start, one after each stage */
+/* Timestamps per slot: one at start, one after each stage. Seven pyramid levels emit twenty-six
+ * of them, and profiler_mark drops in silence whatever does not fit. */
+#define AFMF_PROFILE_QUERIES 48u
 #define AFMF_PROFILE_INTERVAL 300u
 
 /* Profiling stages (AFMF_PROFILE=1): GPU time between consecutive timestamps is attributed to

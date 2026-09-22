@@ -301,6 +301,18 @@ set_tests_properties(headless_pan_scalar_sad PROPERTIES
     FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL|MISMATCH"
     SKIP_RETURN_CODE 77
 )
+# The search's worst case for cost, and the scene none of the tests above has: a scroll with
+# almost no contrast, where no block finds evidence to skip its search and nearly all of them
+# run the full 256 candidates. Long enough (400 presents) for the layer's own profile report,
+# which comes every 300 generated frames and is the per-stage breakdown to read here.
+add_test(NAME headless_fog COMMAND afmf_headless)
+set_tests_properties(headless_fog PROPERTIES
+    ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=2;AFMF_PROFILE=1;AFMF_TEST_FOG=1;AFMF_TEST_FRAMES=400;AFMF_GOVERNOR=0;AFMF_ACQUIRE_TIMEOUT_US=16000;${AFMF_TEST_LOADER_ENV}"
+    PASS_REGULAR_EXPRESSION "presented 400 frames through"
+    FAIL_REGULAR_EXPRESSION "validation error|headless: FAIL"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 120
+)
 add_test(NAME headless_present_mode_keep COMMAND afmf_headless)
 set_tests_properties(headless_present_mode_keep PROPERTIES
     ENVIRONMENT "VK_ADD_LAYER_PATH=${CMAKE_BINARY_DIR}/layer;AFMF_LOG=3;AFMF_PRESENT_MODE=keep;AFMF_ACQUIRE_TIMEOUT_US=16000;AFMF_TEST_FRAME_MS=2;${AFMF_TEST_LOADER_ENV}"

@@ -37,8 +37,16 @@ is vendor-specific except the tuning; a report from any of these is welcome.
 
 ## What the artifacts are
 
-The layer works from the colour buffer alone: no depth, no motion vectors, no HUD mask. Text and
-UI drawn over moving scenes have no motion of their own, so the flow under them is wrong and the
-pixel falls back to the previous frame (`AFMF_FAST_MOTION_RESPONSE=repeat`, the default) or to a
-blend (`blend`, softer on text). AMD's AFMF on Windows has the same limit; UI detection is on the
-list. The gain is larger the further the game is from the display's refresh rate.
+The layer works from the colour buffer alone: no depth, no motion vectors, no HUD mask from the
+game. Every pixel of a generated frame is the average of the two real frames warped halfway
+along the block's motion. Where the two warped samples disagree (a wrong vector, the silhouette
+of an object the camera follows against a fast background, a background uncovered from behind a
+passing object, which only one frame holds) the pixel leans on the current frame's own unmoved
+value instead of drawing both, so a double edge is the exception rather than the rule. A pixel
+that is identical in both frames while its block moves is a static overlay (HUD, crosshair,
+subtitles) and is kept as it is (`AFMF_HUD_DETECT`). Motion beyond 128 pixels between frames, and
+the frames after a scene cut, are not interpolated: the pixel falls back to a blend of the two
+frames (`AFMF_FAST_MOTION_RESPONSE=blend`, the default) or to the previous frame (`repeat`). What
+is behind an object as it passes is in neither frame and cannot be invented. AMD's AFMF on
+Windows has the same limits. The gain is larger the further the game is from the display's
+refresh rate.

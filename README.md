@@ -70,8 +70,12 @@ not. Leave the in-game setting as it is on Windows with AFMF.
    application's last one, serialised with its use), so the graphics queue never waits for it,
    and the application's thread is back in the game within tens of microseconds.
 
-Where the flow cannot be trusted (scene cut, motion beyond 64 px) the pixel falls back to the
-previous frame or to a blend, selectable with `AFMF_FAST_MOTION_RESPONSE`.
+Every generated pixel is the average of the two real frames warped halfway along the block's
+motion; where the two warped samples disagree (a wrong vector, a silhouette against a fast
+background, a background uncovered from behind a passing object) it leans on the current frame's
+own unmoved value instead of drawing both. Where the flow cannot be trusted at all (a scene cut,
+motion beyond 128 px between frames) the pixel falls back to a blend or to the previous frame,
+selectable with `AFMF_FAST_MOTION_RESPONSE`.
 
 The frame counter you will see is `real + generated`: the ceiling is twice the frame rate the game
 reaches on Linux without the layer, minus the GPU time the layer itself needs (about 0.45 ms per

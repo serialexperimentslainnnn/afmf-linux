@@ -136,6 +136,13 @@ add_library(afmf-linux SHARED
     src/framegen_record_frame.c
     src/framegen_resources.c
     src/layer.c
+    src/layer_device.c
+    src/layer_device_fns.c
+    src/layer_device_probe.c
+    src/layer_device_queues.c
+    src/layer_instance.c
+    src/layer_queue.c
+    src/layer_registry.c
     src/log.c
     src/swapchain.c
     src/swapchain_cadence.c

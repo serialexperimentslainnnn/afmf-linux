@@ -90,7 +90,7 @@ afmf_glsl(ffx_opticalflow_compute_optical_flow_advanced_pass_v5_int16
     "${AFMF_FFX_DIR}/passes/ffx_opticalflow_compute_optical_flow_advanced_pass_v5.glsl"
     ${AFMF_FFX_DEFINES} -DAFMF_SAD_INT16=1)
 
-# The interpolator, once per output format it can write (see describe_format in src/framegen.c).
+# The interpolator, once per output format it can write (see src/framegen_format.c).
 set(AFMF_INTERP "${CMAKE_SOURCE_DIR}/shaders/afmf_interpolate.comp")
 afmf_glsl(afmf_interpolate_rgba8 "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgba8 -DAFMF_SWAP_RB=0)
 afmf_glsl(afmf_interpolate_rgba8_bgra "${AFMF_INTERP}" -DAFMF_OUT_FORMAT=rgba8 -DAFMF_SWAP_RB=1)
@@ -126,6 +126,15 @@ add_custom_command(
 add_library(afmf-linux SHARED
     src/config.c
     src/framegen.c
+    src/framegen_descriptors.c
+    src/framegen_dump.c
+    src/framegen_format.c
+    src/framegen_passes.c
+    src/framegen_pipelines.c
+    src/framegen_profiler.c
+    src/framegen_record.c
+    src/framegen_record_frame.c
+    src/framegen_resources.c
     src/layer.c
     src/log.c
     src/swapchain.c

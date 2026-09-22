@@ -141,6 +141,7 @@ struct afmf_swapchain {
      * move it. */
     uint32_t governor_step;
     uint32_t late_streak, early_streak;
+    bool under_floor; /* the real frame rate is below AFMF_MIN_FPS: no companions until it clears it by a margin */
     uint64_t reduced_frames; /* presents that went out without a companion because of the step */
     double frame_ms_ema; /* smoothed time between the application's presents, for pacing */
 
@@ -985,9 +986,22 @@ static bool governor_allows(struct afmf_swapchain *sc, double last_delay_ms, uin
 {
     const struct afmf_config *cfg = afmf_config_get();
     double frame_ms = sc->frame_ms_ema;
-    if (cfg->min_fps > 0 && frame_ms > 0.0 && frame_ms > 1e3 / cfg->min_fps) {
-        sc->reduced_frames++;
-        return false;
+    if (cfg->min_fps > 0 && frame_ms > 0.0) {
+        /* Two thresholds, or a game sitting on the floor turns generation on and off with every
+         * frame: doubling lightens the GPU, the rate rises, the floor clears, the companions
+         * come back and it drops again. Generation returns once the rate is a tenth above the
+         * floor, and the governor's streaks restart: what they counted is from before it. */
+        double floor_ms = 1e3 / cfg->min_fps;
+        if (!sc->under_floor && frame_ms > floor_ms)
+            sc->under_floor = true;
+        else if (sc->under_floor && frame_ms < 0.9 * floor_ms) {
+            sc->under_floor = false;
+            sc->late_streak = sc->early_streak = 0;
+        }
+        if (sc->under_floor) {
+            sc->reduced_frames++;
+            return false;
+        }
     }
     if (!cfg->governor || frame_ms <= 0.0)
         return true;

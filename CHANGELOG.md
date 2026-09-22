@@ -32,6 +32,9 @@ All notable changes to afmf-linux are documented here. The format follows
   hold's ceiling is 40 ms, so the generated frame stays halfway down to 12.5 fps.
 - The release fence of the companion's image got no time when the acquire had spent the whole
   budget; it gets a millisecond, and a companion that was there is no longer skipped.
+- `AFMF_MIN_FPS` has a margin: a game sitting on the floor turned generation on and off with
+  every frame, since doubling lightens the GPU, the rate rises and the floor clears. Generation
+  returns once the real rate is a tenth above the floor, and the governor's streaks restart.
 - The HDR luma is clamped before it is stored as a byte: a pixel brighter than the peak used to
   wrap to a dark value, and an out-of-gamut scRGB value reached a cube root as a negative.
 - `AFMF_DUMP_DIR` is copied out of the environment block, which Wine moves.

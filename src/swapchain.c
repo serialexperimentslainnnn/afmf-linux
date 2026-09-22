@@ -1337,6 +1337,8 @@ static VkResult frame_generate(struct afmf_device *dev, struct afmf_swapchain *s
     job->done = slot->fence;
 
     /* Debug dumps block on the submission; only while AFMF_DUMP_DIR asks for frames. */
+    if (sc->fg != NULL)
+        afmf_framegen_dump_arm(sc->fg);
     if (generate && sc->fg != NULL && afmf_framegen_dump_recorded(sc->fg)) {
         (void)f->wait_for_fences(dev->handle, 1, &slot->fence, VK_TRUE, UINT64_MAX);
         afmf_framegen_dump_write(dev, sc->fg);

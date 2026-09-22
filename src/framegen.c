@@ -480,6 +480,7 @@ struct afmf_framegen {
     uint32_t dumps_written;
     bool dump_recorded; /* the command buffer in flight copies into dump_buffer */
     uint32_t dump_frame;  /* frame index of that dump: the companion of real frame dump_frame */
+    uint32_t dump_from;   /* first frame of the batch of four being written */
 };
 
 struct secondary {
@@ -967,9 +968,28 @@ static void profiler_begin(struct afmf_device *dev, struct afmf_framegen *fg, Vk
     profiler_mark(dev, fg, cmd, slot, STAGE_INGEST); /* the opening timestamp; stage unused */
 }
 
+/* Four frames are written at the start of every swapchain, which in most games is a loading
+ * screen. `touch <AFMF_DUMP_DIR>/dump-now` while playing arms another four from the next frame,
+ * so they come from the scene on screen. The file is polled once a second on the work thread
+ * (one failed remove() per second) rather than watched. */
+void afmf_framegen_dump_arm(struct afmf_framegen *fg)
+{
+    if (fg->dump_mapped == NULL || fg->dumps_written < AFMF_DUMP_FRAMES ||
+        fg->frame_index % 60u != 0u)
+        return;
+    char path[512];
+    int n = snprintf(path, sizeof path, "%s/dump-now", afmf_config_get()->dump_dir);
+    if (n < 0 || (size_t)n >= sizeof path || remove(path) != 0)
+        return;
+    fg->dumps_written = 0;
+    fg->dump_from = fg->frame_index + 1u;
+    AFMF_INFO("dump armed: the next %u generated frames go to %s", AFMF_DUMP_FRAMES,
+              afmf_config_get()->dump_dir);
+}
+
 bool afmf_framegen_dump_pending(const struct afmf_framegen *fg)
 {
-    return fg->dump_mapped != NULL && fg->frame_index >= AFMF_DUMP_FIRST &&
+    return fg->dump_mapped != NULL && fg->frame_index >= fg->dump_from &&
            fg->dumps_written < AFMF_DUMP_FRAMES;
 }
 
@@ -1427,6 +1447,7 @@ struct afmf_framegen *afmf_framegen_create(struct afmf_device *dev, VkFormat swa
     fg->extent = extent;
     fg->slots = slots;
     fg->swapchain_format = swapchain_format;
+    fg->dump_from = AFMF_DUMP_FIRST;
     bool have_images = images != NULL && image_count > 0 && image_count <= 16;
     fg->direct_variant = direct_variant_for(dev, swapchain_format);
     fg->direct = have_images && direct_output && fg->direct_variant != VARIANT_COUNT;

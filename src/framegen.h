@@ -68,6 +68,9 @@ uint32_t afmf_framegen_max_levels(const struct afmf_framegen *fg);
  * `afmf_framegen_dump_recorded` says whether the command buffer just recorded did, and once
  * its submission has completed afmf_framegen_dump_write stores <dir>/afmf_generated_<frame>.ppm
  * and <dir>/afmf_flow_<frame>.txt ("vx vy" per block, prev = cur + v). 8-bit variants only. */
+/* Rearms the four-frame dump when AFMF_DUMP_DIR/dump-now exists, so a dump can be taken from
+ * whatever is on screen instead of the frames that follow a swapchain's creation. */
+void afmf_framegen_dump_arm(struct afmf_framegen *fg);
 bool afmf_framegen_dump_pending(const struct afmf_framegen *fg);
 bool afmf_framegen_dump_recorded(const struct afmf_framegen *fg);
 void afmf_framegen_dump_write(struct afmf_device *dev, struct afmf_framegen *fg);

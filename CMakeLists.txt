@@ -138,6 +138,16 @@ add_library(afmf-linux SHARED
     src/layer.c
     src/log.c
     src/swapchain.c
+    src/swapchain_cadence.c
+    src/swapchain_chain.c
+    src/swapchain_create.c
+    src/swapchain_destroy.c
+    src/swapchain_present_chain.c
+    src/swapchain_presenter.c
+    src/swapchain_record.c
+    src/swapchain_resources.c
+    src/swapchain_threads.c
+    src/swapchain_worker.c
     "${AFMF_SPIRV_HEADER}"
 )
 target_include_directories(afmf-linux PRIVATE src "${AFMF_SPV_DIR}")

@@ -31,7 +31,7 @@ names mirror the settings AMD exposes for AFMF on Windows where such a setting e
 | `AFMF_HUD_DETECT` | `1` | A pixel that is the same in both frames (within one 8-bit level) while its block moves is a static overlay (HUD, crosshair, subtitles): it is kept instead of warped. `0` warps everything |
 | `AFMF_INTERPOLATE` | `1` | `0` repeats the previous frame instead of interpolating (debug) |
 | `AFMF_PROFILE` | `0` | `1` logs GPU time per stage and host time per present every 300 frames and at teardown |
-| `AFMF_DUMP_DIR` | unset | Writes four generated frames (the companions of real frames 8-11, after the flow's warm-up) into that directory, created if it does not exist, as `afmf_generated_<frame>.ppm`. Those first four are a loading screen in most games: `touch <dir>/dump-now` while playing writes another four from what is on screen at that moment, as often as you like, with the block flow as `afmf_flow_<frame>.txt` (`vx vy` per block, `prev = cur + v`) and a log line with the luma and flow statistics. 8-bit formats only |
+| `AFMF_DUMP_DIR` | unset | Writes four generated frames into that directory, created if it does not exist: `afmf_generated_<frame>.ppm` with the block flow that made it as `afmf_flow_<frame>.txt` (`vx vy` per block, `prev = cur + v`), and a log line with the luma and flow statistics. They are the companions of real frames 8-11, before which the scene change detector is still warming up, which in most games is a loading screen: `touch <dir>/dump-now` while playing writes another four from what is on screen at that moment, as often as you like. 8- and 10-bit swapchains; a format that cannot be dumped is named in the log |
 
 ## Presets
 

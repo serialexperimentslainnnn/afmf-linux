@@ -8,6 +8,11 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [1.1.1] - 2026-09-22
 
+### Added
+- `touch <AFMF_DUMP_DIR>/dump-now` while a game runs writes the next four generated frames and
+  their flow fields. The four a swapchain writes on its own are a loading screen in most games,
+  which made the dump useless for looking at a scene.
+
 ### Fixed
 - `AFMF_DUMP_DIR` creates the directory it names. It used to write nothing at all when the
   directory did not exist yet, and say so only at warning level.

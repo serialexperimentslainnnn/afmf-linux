@@ -3,7 +3,7 @@
 %global layer_dir %{_datadir}/vulkan/implicit_layer.d
 
 Name:           afmf-linux
-Version:        1.3.0
+Version:        1.3.1
 Release:        1%{?dist}
 Summary:        AMD Fluid Motion Frames for Linux: Vulkan frame generation layer
 License:        MIT
@@ -42,6 +42,15 @@ DXVK and vkd3d-proton titles under Proton. Dormant until AFMF_ENABLE=1 is set fo
 %{layer_dir}/afmf-linux.json
 
 %changelog
+* Tue Sep 22 2026 Lain <lain@digitalexperiments.dev> - 1.3.1-1
+- Device-level commands resolved through vkGetInstanceProcAddr are hooked only where the
+  driver has them; a game submitting from several threads no longer serialises on the layer;
+  the layer's queue is never protected; vkCreateDevice retries with the game's own request
+- The governor paces one-in-n on the frame's own number; AFMF_MIN_FPS clears with a margin;
+  the pacing hold has a minimum with pacing on and a 40 ms ceiling
+- The HDR luma is clamped before it is stored as a byte; the half-resolution downscale samples
+  against the frame's size
+
 * Tue Sep 22 2026 Lain <lain@digitalexperiments.dev> - 1.3.0-1
 - The optical flow and the block search follow the resolution by default instead of always
   asking for the most: half resolution and five pyramid levels from 1440p up, 716 to 578 us

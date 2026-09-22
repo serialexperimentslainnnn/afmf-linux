@@ -6,6 +6,8 @@ All notable changes to afmf-linux are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-22
+
 ### Fixed
 - A device-level command resolved through `vkGetInstanceProcAddr` was hooked even when the
   driver below lacked it, so on a driver without core `vkQueueSubmit2` a game resolving it that

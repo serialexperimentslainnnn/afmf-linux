@@ -1,3 +1,17 @@
+afmf-linux (1.3.1-1) unstable; urgency=medium
+
+  * Fixed: device-level commands resolved through vkGetInstanceProcAddr are hooked only where
+    the driver has them; a game submitting from several threads no longer serialises on the
+    layer; the layer's queue is never protected; vkCreateDevice retries with the game's own
+    request when the layer's additions fail.
+  * Fixed: the governor paces one-in-n on the frame's own number; AFMF_MIN_FPS clears with a
+    margin instead of flickering generation; the pacing hold has a minimum with pacing on and
+    a 40 ms ceiling.
+  * Fixed: the HDR luma is clamped before it is stored as a byte; the half-resolution downscale
+    samples against the frame's size.
+
+ -- Lain <lain@digitalexperiments.dev>  Tue, 22 Sep 2026 21:40:00 +0200
+
 afmf-linux (1.3.0-1) unstable; urgency=medium
 
   * Changed: the optical flow and the block search follow the resolution by default instead of

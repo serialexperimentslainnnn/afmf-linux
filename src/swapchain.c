@@ -24,7 +24,7 @@
 #define AFMF_ACQUIRE_SLICE_NS 1000000ull
 /* Pacing delay bounds for the real frame: half the frame time, clamped. */
 #define AFMF_PACING_MIN_NS 500000ull
-#define AFMF_PACING_MAX_NS 20000000ull
+#define AFMF_PACING_MAX_NS 40000000ull /* half a frame down to 12.5 fps; AFMF_MIN_FPS=0 allows it */
 /* Governor: the generated frame ready later than this fraction of the frame time, this many
  * frames in a row, steps generation down; ready before the lower fraction for this many frames
  * steps it back up. Steps: 0 everything, 1 five search levels, 2 one companion in two, 3 in three.
@@ -45,6 +45,7 @@ struct afmf_present_job {
     uint32_t real_image;
     uint32_t companion_image;
     bool generate;
+    uint64_t ordinal;         /* this present's number, for the governor's one-in-n cadence */
     struct timespec arrival;
     uint64_t hold_ns;         /* half a frame: the real frame goes out this long after the generated one is ready */
     VkFence done;             /* the layer's submission for this frame: signalled once the generated frame is ready */
@@ -556,12 +557,15 @@ static bool chain_allows_mailbox(const struct afmf_device *dev, VkSurfaceKHR sur
         dev->ifns.get_surface_capabilities2(dev->physical_device, &surface_info, &caps2) != VK_SUCCESS)
         return false;
     uint32_t n = 0;
-    for (uint32_t i = 0; i < list->presentModeCount && n < AFMF_MAX_PRESENT_MODES - 1; i++) {
+    for (uint32_t i = 0; i < list->presentModeCount; i++) {
         bool ok = false;
         for (uint32_t k = 0; k < compatibility.presentModeCount && !ok; k++)
             ok = compatible[k] == list->pPresentModes[i];
-        if (ok && list->pPresentModes[i] != VK_PRESENT_MODE_MAILBOX_KHR)
-            modes[n++] = list->pPresentModes[i];
+        if (!ok || list->pPresentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
+            continue;
+        if (n == AFMF_MAX_PRESENT_MODES - 1)
+            return false; /* more modes than the layer can carry: the application's mode stays */
+        modes[n++] = list->pPresentModes[i];
     }
     modes[n++] = VK_PRESENT_MODE_MAILBOX_KHR;
     *mode_count = n;
@@ -910,7 +914,8 @@ static VkResult record_frame(struct afmf_device *dev, struct afmf_swapchain *sc,
     return dev->fns.end_command_buffer(cmd);
 }
 
-static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
+/* Returns this present's ordinal, which the work thread's governor paces on. */
+static uint64_t update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
 {
     struct timespec now;
     bool have_now = clock_gettime(CLOCK_MONOTONIC, &now) == 0;
@@ -969,12 +974,14 @@ static void update_cadence(struct afmf_device *dev, struct afmf_swapchain *sc)
         sc->frame_time_samples = 0;
         sc->hook_ms = 0.0;
     }
+    uint64_t ordinal = sc->present_count;
     pthread_mutex_unlock(&dev->lock);
+    return ordinal;
 }
 
 /* Whether this present gets a companion, after the governor has looked at how late the last
  * generated frame was ready and at the real frame rate. Called with job_lock held. */
-static bool governor_allows(struct afmf_swapchain *sc, double last_delay_ms)
+static bool governor_allows(struct afmf_swapchain *sc, double last_delay_ms, uint64_t ordinal)
 {
     const struct afmf_config *cfg = afmf_config_get();
     double frame_ms = sc->frame_ms_ema;
@@ -1011,9 +1018,11 @@ static bool governor_allows(struct afmf_swapchain *sc, double last_delay_ms)
                   : sc->governor_step == 2 ? "one companion in two"
                                            : "one companion in three");
     }
-    /* Step 2 and 3 thin the companions out; the reduced frames still enter the history. */
+    /* Step 2 and 3 thin the companions out; the reduced frames still enter the history. The
+     * frame's own ordinal decides, not the present counter, which the application's thread has
+     * moved on by the frames still queued. */
     uint64_t every = sc->governor_step >= 2 ? sc->governor_step : 1;
-    if (sc->present_count % every != 0) {
+    if (ordinal % every != 0) {
         sc->reduced_frames++;
         return false;
     }
@@ -1057,7 +1066,10 @@ static bool spare_take(struct afmf_device *dev, struct afmf_swapchain *sc, uint3
     }
     if (!valid)
         return false;
-    if (dev->fns.wait_for_fences(dev->handle, 1, &sc->spare_fence, VK_TRUE, left) != VK_SUCCESS)
+    /* The release fence gets at least a slice even when the acquire spent the whole budget:
+     * the image is there, and a companion is worth a millisecond of the work thread. */
+    uint64_t fence_wait = left > AFMF_ACQUIRE_SLICE_NS ? left : AFMF_ACQUIRE_SLICE_NS;
+    if (dev->fns.wait_for_fences(dev->handle, 1, &sc->spare_fence, VK_TRUE, fence_wait) != VK_SUCCESS)
         return false;
     (void)dev->fns.reset_fences(dev->handle, 1, &sc->spare_fence);
     wsi_take(sc);
@@ -1273,7 +1285,7 @@ static VkResult frame_generate(struct afmf_device *dev, struct afmf_swapchain *s
     bool generate = false;
     uint32_t j = 0;
     pthread_mutex_lock(&sc->job_lock);
-    bool allowed = governor_allows(sc, sc->last_delay_ms);
+    bool allowed = governor_allows(sc, sc->last_delay_ms, job->ordinal);
     bool have_history = sc->have_history;
     if (!have_history)
         sc->skipped_no_history++;
@@ -1350,7 +1362,9 @@ static VkResult frame_generate(struct afmf_device *dev, struct afmf_swapchain *s
         double half_ms = sc->frame_ms_ema / 2.0;
         pthread_mutex_unlock(&sc->job_lock);
         uint64_t hold = (uint64_t)(half_ms * 1e6);
-        job->hold_ns = hold < AFMF_PACING_MIN_NS   ? 0
+        /* Never zero with pacing on: two presents in the same instant make MAILBOX drop the
+         * generated one, and the frame was made for nothing. */
+        job->hold_ns = hold < AFMF_PACING_MIN_NS   ? AFMF_PACING_MIN_NS
                        : hold > AFMF_PACING_MAX_NS ? AFMF_PACING_MAX_NS
                                                    : hold;
     }
@@ -1526,6 +1540,8 @@ static bool job_from_chain(const struct afmf_swapchain *sc, const VkPresentInfoK
 #endif
         case VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT: {
             const VkSwapchainPresentModeInfoEXT *m = (const VkSwapchainPresentModeInfoEXT *)s;
+            if (m->swapchainCount < 1 || m->pPresentModes == NULL)
+                break; /* nothing to carry */
             job->have_present_mode = true;
             job->present_mode = m->pPresentModes[0];
             /* The swapchain was moved to MAILBOX at creation: a switch back to FIFO would bring
@@ -1628,7 +1644,7 @@ VkResult afmf_swapchain_get_images(struct afmf_device *dev, VkSwapchainKHR swapc
 
 /* The application's present, with the generated frame in front of it when one could be made. */
 static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain *sc, VkQueue queue,
-                                  uint32_t family, const VkPresentInfoKHR *info)
+                                  uint32_t family, const VkPresentInfoKHR *info, uint64_t ordinal)
 {
     const struct afmf_device_fns *f = &dev->fns;
     uint32_t i = info->pImageIndices[0];
@@ -1645,7 +1661,7 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
         return afmf_device_queue_present(dev, queue, info);
     }
 
-    struct afmf_present_job job = {.real_image = i};
+    struct afmf_present_job job = {.real_image = i, .ordinal = ordinal};
     bool threaded = presenter_start(sc) && job_from_chain(sc, info, &job);
     if (!threaded)
         presenter_drain(sc); /* a chain the threads cannot carry: inline, but in order */
@@ -1755,6 +1771,28 @@ static VkResult present_generated(struct afmf_device *dev, struct afmf_swapchain
     VkPresentInfoKHR real = *info;
     real.waitSemaphoreCount = 1;
     real.pWaitSemaphores = &sc->sem_real[i];
+    /* The per-present mode gets the same rewrite as on the threaded path when it heads the
+     * chain (the only place it can be replaced without copying what precedes it); deeper in a
+     * chain the layer cannot carry, it goes out as the application wrote it. */
+    VkSwapchainPresentModeInfoEXT mode_copy;
+    const VkBaseInStructure *head = info->pNext;
+    if (sc->fifo_to_mailbox && head != NULL &&
+        head->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT) {
+        const VkSwapchainPresentModeInfoEXT *m = (const VkSwapchainPresentModeInfoEXT *)head;
+        if (m->swapchainCount >= 1 && m->pPresentModes != NULL) {
+            static const VkPresentModeKHR mailbox = VK_PRESENT_MODE_MAILBOX_KHR;
+            bool allowed = false;
+            for (uint32_t k = 0; k < sc->allowed_mode_count && !allowed; k++)
+                allowed = sc->allowed_modes[k] == m->pPresentModes[0];
+            if (!allowed || m->pPresentModes[0] == VK_PRESENT_MODE_FIFO_KHR ||
+                m->pPresentModes[0] == VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
+                mode_copy = *m;
+                mode_copy.swapchainCount = 1;
+                mode_copy.pPresentModes = &mailbox;
+                real.pNext = &mode_copy;
+            }
+        }
+    }
     res = f->queue_present(work_queue, &real);
     if (sc->async)
         pthread_mutex_unlock(&dev->async_lock);
@@ -1792,9 +1830,9 @@ VkResult afmf_swapchain_present(struct afmf_device *dev, VkQueue queue, const Vk
         return afmf_device_queue_present(dev, queue, info);
     }
 
-    update_cadence(dev, sc);
+    uint64_t ordinal = update_cadence(dev, sc);
     uint32_t family;
     if (!sc->gen_enabled || !afmf_device_queue_family(dev, queue, &family))
         return afmf_device_queue_present(dev, queue, info);
-    return present_generated(dev, sc, queue, family, info);
+    return present_generated(dev, sc, queue, family, info, ordinal);
 }
